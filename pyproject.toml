@@ -140,6 +140,20 @@ module = [
 ]
 ignore_missing_imports = true
 
+# Optional dependency stubs
+[[tool.mypy.overrides]]
+module = [
+  "psycopg2",
+  "psycopg2.extensions",
+  "jsonschema",
+  "jsonschema.validators",
+  "influxdb_client_3",
+  "influxdb_client_3.write_client.client.write_api",
+  "google.protobuf.json_format",
+  "google.protobuf.message",
+]
+ignore_missing_imports = true
+
 [[tool.mypy.overrides]]
 module = [
   "quixstreams.sinks.community.*",

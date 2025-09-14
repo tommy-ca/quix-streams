@@ -98,6 +98,7 @@ def test_slatedb_corruption_logs_on_recreate(monkeypatch, tmp_path, caplog):
 def test_slatedb_corruption_no_recreate_raises(monkeypatch, tmp_path):
     # When on_corrupted_recreate=False, a corruption should bubble and not retry
     import os
+
     from quixstreams.state.slatedb import driver as drv
 
     corrupt_path = (tmp_path / "corrupt-no-recreate").as_posix()
@@ -126,6 +127,7 @@ def test_slatedb_corruption_no_recreate_raises(monkeypatch, tmp_path):
 
 
 message = "Failed to fully clean corrupted path"
+
 
 def test_slatedb_recreate_cleanup_fail_and_open_fail_logs_and_raises(
     monkeypatch, tmp_path, caplog

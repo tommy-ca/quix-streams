@@ -101,7 +101,11 @@ class SlateDBStorePartition(StorePartition):
             try:
                 os.unlink(self._lock_path)
             except Exception:
-                pass
+                logger.debug(
+                    "Failed to remove lock file %s during cleanup",
+                    self._lock_path,
+                    exc_info=True,
+                )
 
     def close(self):
         logger.debug(f'Closing slatedb partition on "{self._path}"')
