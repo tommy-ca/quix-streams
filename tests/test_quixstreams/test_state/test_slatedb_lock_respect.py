@@ -1,10 +1,11 @@
 import json
 import os
+
 import pytest
 
+from quixstreams.state.slatedb.exceptions import SlateDBLockError
 from quixstreams.state.slatedb.options import SlateDBOptions
 from quixstreams.state.slatedb.partition import SlateDBStorePartition
-from quixstreams.state.slatedb.exceptions import SlateDBLockError
 
 
 def test_lock_respected_when_pid_exists(tmp_path):
