@@ -73,3 +73,13 @@ nav:
     - Sinks API: api-reference/sinks.md
     - Kafka Producer & Consumer API: api-reference/kafka.md
     - Full Reference: api-reference/quixstreams.md
+
+  - Quix Connectors:
+    - Quix Streams:
+      - Sources:
+        - Overview: connectors/sources/README.md
+        - Custom Sources: connectors/sources/custom-sources.md
+        - Crypto:
+          - Binance S3 Source: connectors/sources/crypto-binance-s3-source.md
+          - Cryptofeed Source: connectors/sources/crypto-cryptofeed-source.md
+          - CCXT Source: connectors/sources/crypto-ccxt-source.md
