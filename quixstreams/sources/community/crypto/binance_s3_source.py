@@ -20,6 +20,10 @@ from quixstreams.sources.community.crypto.utils import TopicBuilder, default_key
 
 logger = logging.getLogger(__name__)
 
+# module-level aliases for test monkeypatching
+_time = None
+_backoff_sequence: list[float] | None = None
+
 __all__ = ("BinanceS3Source",)
 
 
@@ -98,6 +102,76 @@ class BinanceS3Source(Source):
         # validate access by listing a single key under prefix
         self._s3.list_objects_v2(Bucket=self._bucket, Prefix=self._prefix, MaxKeys=1)
 
-    # Placeholder run to be implemented in follow-up TDD steps
+    def _iter_object_keys(self) -> Iterable[str]:
+        token = None
+        while True:
+            kwargs = {"Bucket": self._bucket, "Prefix": self._prefix, "MaxKeys": 1000}
+            if token:
+                kwargs["ContinuationToken"] = token
+            resp = self._s3.list_objects_v2(**kwargs)
+            for obj in resp.get("Contents", []) or []:
+                yield obj["Key"]
+            if resp.get("IsTruncated"):
+                token = resp.get("NextContinuationToken")
+            else:
+                break
+
+    def _read_object(self, key: str) -> bytes:
+        # retry with simple backoff sequence injected for tests
+        from typing import cast
+        seq = cast(list[float], globals().get("_backoff_sequence") or [0.5, 1.0, 2.0])
+        for i, backoff in enumerate(seq + [None]):
+            try:
+                obj = self._s3.get_object(Bucket=self._bucket, Key=key)
+                return obj["Body"].read()
+            except Exception as e:  # noqa: BLE001
+                if backoff is None:
+                    raise
+                logger.warning(f"get_object failed for {key}, retrying in {backoff}s: {e}")
+                global _time
+                import time as _t
+                (_time or _t).sleep(backoff)
+        raise RuntimeError("unreachable")
+
+    def _iter_records_from_body(self, key: str, body: bytes) -> Iterable[dict]:
+        # infer gzip by extension
+        import gzip as _gzip
+        raw = _gzip.decompress(body) if key.endswith(".gz") else body
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            import json
+            try:
+                yield json.loads(line)
+            except Exception:  # noqa: BLE001
+                logger.warning("Skipping malformed line in %s", key)
+                continue
+
+
     def run(self):
-        logger.info("BinanceS3Source run() not yet implemented; exiting.")
+        import time as _t
+        # expose alias on module for tests
+        global _time
+        if _time is None:
+            _time = _t
+        keys = sorted(list(self._iter_object_keys()))
+        prev_ts = None
+        for key in keys:
+            body = self._read_object(key)
+            for record in self._iter_records_from_body(key, body):
+                ts = self._timestamp_setter(record)
+                if prev_ts is not None and self._replay_speed and self._replay_speed > 0:
+                    delta = max(0.0, (ts - prev_ts) / 1000.0) * self._replay_speed
+                    if delta > 0:
+                        if _time is None:
+                            import time as _t
+                            _t.sleep(delta)
+                        else:
+                            _time.sleep(delta)
+                prev_ts = ts
+                msg = self.producer_topic.serialize(
+                    key=self._key_setter(record), value=record, timestamp_ms=ts
+                )
+                self.produce(key=msg.key, value=msg.value, timestamp=msg.timestamp)
+        self.producer.flush()
