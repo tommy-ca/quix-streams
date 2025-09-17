@@ -158,9 +158,13 @@ class BinanceS3Source(Source):
 
     def _iter_object_keys(self) -> Iterable[str]:
         for pref in self._iter_prefixes():
+            # normalize double slashes and ensure trailing slash
+            npref = pref.replace("//", "/")
+            if not npref.endswith("/"):
+                npref = npref + "/"
             token = None
             while True:
-                kwargs = {"Bucket": self._bucket, "Prefix": pref, "MaxKeys": 1000}
+                kwargs = {"Bucket": self._bucket, "Prefix": npref, "MaxKeys": 1000}
                 if token:
                     kwargs["ContinuationToken"] = token
                 resp = self._s3.list_objects_v2(**kwargs)

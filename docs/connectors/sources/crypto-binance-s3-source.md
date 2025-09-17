@@ -36,6 +36,47 @@ Owner: quix-streams community
   - interval: e.g., "1m" for klines (used in filenames; optional)
 
 The dataloader iterates: for each segment in segments; for each datatype in datatypes; for each symbol in symbols; for each date in [date_from..date_to] (if segment=daily) → produces a concrete S3 prefix from the template and loads all files under it.
+
+Examples of patterns
+- Daily Trades (Spot):
+  - prefix_template: p/{market}/{segment}/{datatype}/{symbol}/{date}/
+  - market=spot, segments=[daily], datatypes=[trades], symbols=[BTCUSDT,ETHUSDT], date_from=2025-01-01, date_to=2025-01-02
+  - Generated prefixes (subset):
+    - p/spot/daily/trades/BTCUSDT/2025-01-01/
+    - p/spot/daily/trades/BTCUSDT/2025-01-02/
+    - p/spot/daily/trades/ETHUSDT/2025-01-01/
+- Monthly Klines (Spot):
+  - prefix_template: p/{market}/{segment}/{datatype}/{symbol}/
+  - market=spot, segments=[monthly], datatypes=[klines], symbols=[BTCUSDT]
+  - Generated prefixes:
+    - p/spot/monthly/klines/BTCUSDT/
+
+Example usage
+```python
+from quixstreams import Application
+from quixstreams.sources.community.crypto import BinanceS3Source
+
+app = Application(broker_address="localhost:19092")
+
+source = BinanceS3Source(
+    bucket="data.binance.example",
+    prefix="p/",
+    access_mode="templated_prefixes",
+    prefix_template="p/{market}/{segment}/{datatype}/{symbol}/{date}/",
+    market="spot",
+    segments=["daily"],
+    datatypes_list=["trades","klines"],
+    symbols=["BTCUSDT","ETHUSDT"],
+    date_from="2025-01-01",
+    date_to="2025-01-02",
+    checksum_mode="warn",
+)
+
+sdf = app.dataframe(source=source)
+sdf.print(metadata=True)
+
+app.run()
+```
 - bucket: str (required)
 - prefix: str (path prefix to files; required)
 - unsigned: bool = false (use anonymous access)

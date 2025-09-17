@@ -143,6 +143,43 @@ def test_recursive_listing_and_ordering(monkeypatch, mock_boto3):
     assert sorted(emitted_ts) == [1000, 1500, 2000]
 
 
+def test_dataloader_monthly_no_dates(monkeypatch, mock_boto3):
+    # Monthly segment with no dates, prefix has no {date} placeholder
+    import json, gzip
+    def list_objects_v2(**kwargs):
+        pref = kwargs["Prefix"]
+        assert pref == "p/spot/monthly/klines/BTCUSDT/"
+        return {"IsTruncated": False, "Contents": [{"Key": f"{pref}file.jsonl.gz"}]}
+
+    class DummyBody:
+        def __init__(self, b): self._b=b
+        def read(self): return self._b
+
+    def get_object(**kwargs):
+        data = json.dumps({"exchange":"binance","symbol":"BTCUSDT","price":1,"qty":1,"ts_event":1})+"\n"
+        import gzip as gz
+        return {"Body": DummyBody(gz.compress(data.encode()))}
+
+    dummy = mock_boto3
+    dummy.list_objects_v2 = list_objects_v2
+    dummy.get_object = get_object
+
+    src = BinanceS3Source(
+        bucket="b",
+        prefix="p/",
+        access_mode="templated_prefixes",
+        prefix_template="p/{market}/{segment}/{datatype}/{symbol}/",
+        market="spot",
+        segments=["monthly"],
+        datatypes_list=["klines"],
+        symbols=["BTCUSDT"],
+    )
+    src._s3 = dummy
+    fakeprod = _fake_topic_and_producer(monkeypatch, src)
+    src.run()
+    assert len(fakeprod.produced) == 1
+
+
 def test_dataloader_prefix_generation_and_listing(monkeypatch, mock_boto3):
     # Generate prefixes for 2 symbols x 2 datatypes x 2 dates (daily) => 8 prefixes
     import json, gzip
