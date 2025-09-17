@@ -143,6 +143,59 @@ def test_recursive_listing_and_ordering(monkeypatch, mock_boto3):
     assert sorted(emitted_ts) == [1000, 1500, 2000]
 
 
+def test_dataloader_prefix_generation_and_listing(monkeypatch, mock_boto3):
+    # Generate prefixes for 2 symbols x 2 datatypes x 2 dates (daily) => 8 prefixes
+    import json, gzip
+    expected_prefixes = set()
+    symbols = ["BTCUSDT","ETHUSDT"]
+    datatypes = ["trades","klines"]
+    dates = ["2025-01-01","2025-01-02"]
+    def list_objects_v2(**kwargs):
+        pref = kwargs["Prefix"]
+        assert pref in expected_prefixes, f"Unexpected prefix {pref}"
+        # return one file per prefix
+        return {"IsTruncated": False, "Contents": [{"Key": f"{pref}file.jsonl.gz"}]}
+
+    def make_body():
+        data = json.dumps({"exchange":"binance","symbol":"X","price":1,"qty":1,"ts_event":1})+"\n"
+        return gzip.compress(data.encode())
+
+    class DummyBody:
+        def __init__(self, b): self._b=b
+        def read(self): return self._b
+
+    def get_object(**kwargs):
+        return {"Body": DummyBody(make_body())}
+
+    # build expected prefixes
+    for dt in datatypes:
+        for sym in symbols:
+            for d in dates:
+                expected_prefixes.add(f"p/spot/daily/{dt}/{sym}/{d}/")
+
+    dummy = mock_boto3
+    dummy.list_objects_v2 = list_objects_v2
+    dummy.get_object = get_object
+
+    src = BinanceS3Source(
+        bucket="b",
+        prefix="p/",
+        access_mode="templated_prefixes",
+        prefix_template="p/{market}/{segment}/{datatype}/{symbol}/{date}/",
+        market="spot",
+        segments=["daily"],
+        datatypes_list=datatypes,
+        symbols=symbols,
+        date_from="2025-01-01",
+        date_to="2025-01-02",
+    )
+    src._s3 = dummy
+    fakeprod = _fake_topic_and_producer(monkeypatch, src)
+    src.run()
+    # 8 prefixes -> 8 files -> 8 produced records
+    assert len(fakeprod.produced) == 8
+
+
 def test_parsers_json_gz_line_delimited(monkeypatch, mock_boto3):
     import quixstreams.sources.community.crypto.binance_s3_source as mod
     import json, gzip, zipfile, io

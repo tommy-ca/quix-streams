@@ -24,12 +24,18 @@ Owner: quix-streams community
 5. Configuration (proposed)
 - Access modes:
   - direct_prefix: use a single prefix (existing behaviour)
-  - templated_prefixes: generate multiple prefixes using a template and symbol/date iteration
-- prefix_template (templated_prefixes mode): e.g. "data/binance/spot/daily/{datatype}/{symbol}/{date}/"
-- symbols: list[str]
-- date_from/date_to: YYYY-MM-DD inclusive (daily segments)
-- interval: e.g., "1m" for klines (used in filenames)
-- market: "spot"|"um_futures"|"cm_futures" (informational in v1)
+  - templated_prefixes: generate multiple prefixes using a template and symbol/date iteration (dataloader pattern)
+- dataloader fields (templated_prefixes):
+  - prefix_template: e.g. "{root}/{market}/{segment}/{datatype}/{symbol}/{date}/"
+  - root: e.g., "p" (top-level folder)
+  - market: "spot"|"um_futures"|"cm_futures"
+  - segments: list of "daily"|"monthly"
+  - datatypes: list[str] (e.g., ["trades","klines"])
+  - symbols: list[str]
+  - date_from/date_to: YYYY-MM-DD inclusive for daily; monthly derived as YYYY-MM
+  - interval: e.g., "1m" for klines (used in filenames; optional)
+
+The dataloader iterates: for each segment in segments; for each datatype in datatypes; for each symbol in symbols; for each date in [date_from..date_to] (if segment=daily) → produces a concrete S3 prefix from the template and loads all files under it.
 - bucket: str (required)
 - prefix: str (path prefix to files; required)
 - unsigned: bool = false (use anonymous access)

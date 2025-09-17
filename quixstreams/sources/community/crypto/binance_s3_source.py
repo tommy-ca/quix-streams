@@ -57,6 +57,16 @@ class BinanceS3Source(Source):
         has_partition_folders: bool = False,
         checksum_mode: str = "skip",
         extract_metadata: bool = True,
+        # dataloader (templated_prefixes) options
+        access_mode: str = "direct_prefix",
+        prefix_template: Optional[str] = None,
+        root: Optional[str] = None,
+        market: Optional[str] = None,
+        segments: Optional[list[str]] = None,
+        datatypes_list: Optional[list[str]] = None,
+        symbols: Optional[list[str]] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
         name: Optional[str] = None,
         shutdown_timeout: float = 30.0,
         on_client_connect_success: Optional[ClientConnectSuccessCallback] = None,
@@ -94,6 +104,16 @@ class BinanceS3Source(Source):
         self._has_partition_folders = has_partition_folders
         self._checksum_mode = checksum_mode
         self._extract_metadata = extract_metadata
+        # dataloader config
+        self._access_mode = access_mode
+        self._prefix_template = prefix_template
+        self._root = root or ""
+        self._market = market
+        self._segments = segments or ["daily"]
+        self._datatypes_list = datatypes_list or [datatype]
+        self._symbols = symbols or []
+        self._date_from = date_from
+        self._date_to = date_to
 
         self._s3 = None
 
@@ -106,19 +126,50 @@ class BinanceS3Source(Source):
         # validate access by listing a single key under prefix
         self._s3.list_objects_v2(Bucket=self._bucket, Prefix=self._prefix, MaxKeys=1)
 
+    def _iter_prefixes(self) -> Iterable[str]:
+        if self._access_mode == "direct_prefix" or not self._prefix_template:
+            yield self._prefix
+            return
+        # templated dataloader expansion
+        from datetime import datetime, timedelta
+        dates: list[str] = []
+        if self._date_from and self._date_to:
+            start = datetime.strptime(self._date_from, "%Y-%m-%d")
+            end = datetime.strptime(self._date_to, "%Y-%m-%d")
+            cur = start
+            while cur <= end:
+                dates.append(cur.strftime("%Y-%m-%d"))
+                cur += timedelta(days=1)
+        else:
+            dates = []
+        for seg in self._segments:
+            for dt in self._datatypes_list:
+                for sym in (self._symbols or [""]):
+                    if seg == "daily" and dates:
+                        for d in dates:
+                            yield self._prefix_template.format(
+                                root=self._root or "", market=self._market or "", segment=seg, datatype=dt, symbol=sym, date=d
+                            )
+                    else:
+                        # monthly or unspecified date
+                        yield self._prefix_template.format(
+                            root=self._root or "", market=self._market or "", segment=seg, datatype=dt, symbol=sym, date=""
+                        )
+
     def _iter_object_keys(self) -> Iterable[str]:
-        token = None
-        while True:
-            kwargs = {"Bucket": self._bucket, "Prefix": self._prefix, "MaxKeys": 1000}
-            if token:
-                kwargs["ContinuationToken"] = token
-            resp = self._s3.list_objects_v2(**kwargs)
-            for obj in resp.get("Contents", []) or []:
-                yield obj["Key"]
-            if resp.get("IsTruncated"):
-                token = resp.get("NextContinuationToken")
-            else:
-                break
+        for pref in self._iter_prefixes():
+            token = None
+            while True:
+                kwargs = {"Bucket": self._bucket, "Prefix": pref, "MaxKeys": 1000}
+                if token:
+                    kwargs["ContinuationToken"] = token
+                resp = self._s3.list_objects_v2(**kwargs)
+                for obj in resp.get("Contents", []) or []:
+                    yield obj["Key"]
+                if resp.get("IsTruncated"):
+                    token = resp.get("NextContinuationToken")
+                else:
+                    break
 
     def _read_object(self, key: str) -> bytes:
         # retry with simple backoff sequence injected for tests
