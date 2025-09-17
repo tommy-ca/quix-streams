@@ -33,7 +33,8 @@ Owner: quix-streams community
   - datatypes: list[str] (e.g., ["trades","klines"])
   - symbols: list[str]
   - date_from/date_to: YYYY-MM-DD inclusive for daily; monthly derived as YYYY-MM
-  - interval: e.g., "1m" for klines (used in filenames; optional)
+- interval: e.g., "1m" for klines (used in filenames; optional)
+  - You can reference {interval} in prefix_template if present in the folder structure (e.g., p/{market}/{segment}/{datatype}/{interval}/{symbol}/{date}/)
 
 The dataloader iterates: for each segment in segments; for each datatype in datatypes; for each symbol in symbols; for each date in [date_from..date_to] (if segment=daily) → produces a concrete S3 prefix from the template and loads all files under it.
 

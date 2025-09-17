@@ -180,6 +180,45 @@ def test_dataloader_monthly_no_dates(monkeypatch, mock_boto3):
     assert len(fakeprod.produced) == 1
 
 
+def test_dataloader_futures_with_interval(monkeypatch, mock_boto3):
+    # UM futures, daily klines with interval in path
+    import json, gzip
+    expected = "p/um_futures/daily/klines/1m/BTCUSDT/2025-01-01/"
+    def list_objects_v2(**kwargs):
+        assert kwargs["Prefix"] == expected
+        return {"IsTruncated": False, "Contents": [{"Key": f"{expected}file.jsonl.gz"}]}
+
+    class DummyBody:
+        def __init__(self, b): self._b=b
+        def read(self): return self._b
+
+    def get_object(**kwargs):
+        data = json.dumps({"exchange":"binance","symbol":"BTCUSDT","price":1,"qty":1,"ts_event":1})+"\n"
+        return {"Body": DummyBody(gzip.compress(data.encode()))}
+
+    dummy = mock_boto3
+    dummy.list_objects_v2 = list_objects_v2
+    dummy.get_object = get_object
+
+    src = BinanceS3Source(
+        bucket="b",
+        prefix="p/",
+        access_mode="templated_prefixes",
+        prefix_template="p/{market}/{segment}/{datatype}/{interval}/{symbol}/{date}/",
+        market="um_futures",
+        segments=["daily"],
+        datatypes_list=["klines"],
+        symbols=["BTCUSDT"],
+        date_from="2025-01-01",
+        date_to="2025-01-01",
+        interval="1m",
+    )
+    src._s3 = dummy
+    fakeprod = _fake_topic_and_producer(monkeypatch, src)
+    src.run()
+    assert len(fakeprod.produced) == 1
+
+
 def test_dataloader_prefix_generation_and_listing(monkeypatch, mock_boto3):
     # Generate prefixes for 2 symbols x 2 datatypes x 2 dates (daily) => 8 prefixes
     import json, gzip

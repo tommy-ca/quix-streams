@@ -67,6 +67,7 @@ class BinanceS3Source(Source):
         symbols: Optional[list[str]] = None,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
+        interval: Optional[str] = None,
         name: Optional[str] = None,
         shutdown_timeout: float = 30.0,
         on_client_connect_success: Optional[ClientConnectSuccessCallback] = None,
@@ -114,6 +115,7 @@ class BinanceS3Source(Source):
         self._symbols = symbols or []
         self._date_from = date_from
         self._date_to = date_to
+        self._interval = interval or ""
 
         self._s3 = None
 
@@ -148,12 +150,24 @@ class BinanceS3Source(Source):
                     if seg == "daily" and dates:
                         for d in dates:
                             yield self._prefix_template.format(
-                                root=self._root or "", market=self._market or "", segment=seg, datatype=dt, symbol=sym, date=d
+                                root=self._root or "",
+                                market=self._market or "",
+                                segment=seg,
+                                datatype=dt,
+                                symbol=sym,
+                                date=d,
+                                interval=self._interval,
                             )
                     else:
                         # monthly or unspecified date
                         yield self._prefix_template.format(
-                            root=self._root or "", market=self._market or "", segment=seg, datatype=dt, symbol=sym, date=""
+                            root=self._root or "",
+                            market=self._market or "",
+                            segment=seg,
+                            datatype=dt,
+                            symbol=sym,
+                            date="",
+                            interval=self._interval,
                         )
 
     def _iter_object_keys(self) -> Iterable[str]:
