@@ -194,27 +194,13 @@ class BinanceS3Source(Source):
         from typing import cast
         import hashlib
         seq = cast(list[float], globals().get("_backoff_sequence") or [0.5, 1.0, 2.0])
+        # Step 1: fetch body with retry/backoff
+        body = None
         for i, backoff in enumerate(seq + [None]):
             try:
                 obj = self._s3.get_object(Bucket=self._bucket, Key=key)
                 body = obj["Body"].read()
-                # Optional checksum verification
-                if self._checksum_mode != "skip":
-                    try:
-                        chk_obj = self._s3.get_object(Bucket=self._bucket, Key=f"{key}.CHECKSUM")
-                        expected = chk_obj["Body"].read().decode().strip().split()[0]
-                        actual = hashlib.md5(body).hexdigest()
-                        if expected != actual:
-                            msg = f"Checksum mismatch for {key}: expected {expected}, got {actual}"
-                            if self._checksum_mode == "strict":
-                                raise ValueError(msg)
-                            else:
-                                logger.warning(msg)
-                    except Exception:
-                        # ignore missing checksum file or errors in warn/skip
-                        if self._checksum_mode == "strict":
-                            raise
-                return body
+                break
             except Exception as e:  # noqa: BLE001
                 if backoff is None:
                     raise
@@ -222,7 +208,26 @@ class BinanceS3Source(Source):
                 global _time
                 import time as _t
                 (_time or _t).sleep(backoff)
-        raise RuntimeError("unreachable")
+        if body is None:
+            raise RuntimeError("unreachable")
+        # Step 2: checksum verification without backoff looping (deterministic)
+        if self._checksum_mode != "skip":
+            try:
+                chk_obj = self._s3.get_object(Bucket=self._bucket, Key=f"{key}.CHECKSUM")
+                expected = chk_obj["Body"].read().decode().strip().split()[0]
+                actual = hashlib.md5(body).hexdigest()
+                if expected != actual:
+                    msg = f"Checksum mismatch for {key}: expected {expected}, got {actual}"
+                    if self._checksum_mode == "strict":
+                        # do not backoff/retry on deterministic mismatch
+                        raise ValueError(msg)
+                    else:
+                        logger.warning(msg)
+            except Exception as e:
+                # Missing checksum or errors: only raise in strict mode
+                if self._checksum_mode == "strict":
+                    raise
+        return body
 
     def _iter_records_from_body(self, key: str, body: bytes) -> Iterable[dict]:
         # Handle gzip/zip/csv/jsonl
