@@ -122,12 +122,16 @@ class BinanceS3Source(Source):
         self._s3 = None
 
     def setup(self):
+        # validate templated configuration
+        if self._access_mode == "templated_prefixes" and not self._prefix_template:
+            raise ValueError("'prefix_template' is required when access_mode='templated_prefixes'")
         cfg = None
         if self._unsigned:
             # Use unsigned requests for public archives
             cfg = BotoConfig(signature_version=botocore.UNSIGNED)  # type: ignore[attr-defined]
         self._s3 = boto3.client("s3", config=cfg, **{k: v for k, v in self._credentials.items() if v})
         # validate access by listing a single key under prefix
+        # In templated mode, we cannot validate every prefix cheaply; validate root prefix only
         self._s3.list_objects_v2(Bucket=self._bucket, Prefix=self._prefix, MaxKeys=1)
 
     def _iter_prefixes(self) -> Iterable[str]:

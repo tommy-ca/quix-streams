@@ -143,7 +143,7 @@ def test_recursive_listing_and_ordering(monkeypatch, mock_boto3):
     assert sorted(emitted_ts) == [1000, 1500, 2000]
 
 
-def test_dataloader_monthly_no_dates(monkeypatch, mock_boto3):
+# dataloader-specific tests moved to tests/.../test_crypto/binance_s3/test_dataloader.py
     # Monthly segment with no dates, prefix has no {date} placeholder
     import json, gzip
     def list_objects_v2(**kwargs):
@@ -180,7 +180,6 @@ def test_dataloader_monthly_no_dates(monkeypatch, mock_boto3):
     assert len(fakeprod.produced) == 1
 
 
-def test_dataloader_futures_with_interval(monkeypatch, mock_boto3):
     # UM futures, daily klines with interval in path
     import json, gzip
     expected = "p/um_futures/daily/klines/1m/BTCUSDT/2025-01-01/"
@@ -219,7 +218,23 @@ def test_dataloader_futures_with_interval(monkeypatch, mock_boto3):
     assert len(fakeprod.produced) == 1
 
 
-def test_dataloader_prefix_generation_and_listing(monkeypatch, mock_boto3):
+def test_templated_mode_requires_prefix_template(monkeypatch, mock_boto3):
+    # missing prefix_template should raise ValueError in setup
+    src = BinanceS3Source(
+        bucket="b",
+        prefix="p/",
+        access_mode="templated_prefixes",
+        market="spot",
+        segments=["daily"],
+        datatypes_list=["trades"],
+        symbols=["BTCUSDT"],
+        date_from="2025-01-01",
+        date_to="2025-01-02",
+    )
+    with pytest.raises(ValueError):
+        src.setup()
+
+
     # Generate prefixes for 2 symbols x 2 datatypes x 2 dates (daily) => 8 prefixes
     import json, gzip
     expected_prefixes = set()
@@ -366,7 +381,6 @@ def test_replay_speed_real_time_and_asap(monkeypatch, mock_boto3):
     assert calls == []
 
 
-def test_dataloader_dry_run_lists_without_fetching(monkeypatch, mock_boto3):
     # Ensure that dry_run does not call get_object and produces nothing
     calls = {"listed": 0, "fetched": 0}
     def list_objects_v2(**kwargs):

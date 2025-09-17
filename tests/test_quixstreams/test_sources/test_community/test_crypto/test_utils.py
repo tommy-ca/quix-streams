@@ -101,7 +101,7 @@ def test_exponential_backoff_caps():
     assert vals == [1.0, 2.0, 3.0, 3.0, 3.0]
 
 
-def test_expand_dataloader_prefixes_daily_and_monthly():
+# moved to binance_s3/test_dataloader_utils.py
     from quixstreams.sources.community.crypto.utils import expand_dataloader_prefixes
     # daily
     prefs = expand_dataloader_prefixes(
