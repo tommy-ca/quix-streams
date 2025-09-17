@@ -55,6 +55,8 @@ class BinanceS3Source(Source):
         key_setter: Optional[Callable[[dict], object]] = None,
         timestamp_setter: Optional[Callable[[dict], Optional[int]]] = None,
         has_partition_folders: bool = False,
+        checksum_mode: str = "skip",
+        extract_metadata: bool = True,
         name: Optional[str] = None,
         shutdown_timeout: float = 30.0,
         on_client_connect_success: Optional[ClientConnectSuccessCallback] = None,
@@ -90,6 +92,8 @@ class BinanceS3Source(Source):
         self._key_setter = key_setter or default_key_fn
         self._timestamp_setter = timestamp_setter or default_ts_fn
         self._has_partition_folders = has_partition_folders
+        self._checksum_mode = checksum_mode
+        self._extract_metadata = extract_metadata
 
         self._s3 = None
 
@@ -119,11 +123,29 @@ class BinanceS3Source(Source):
     def _read_object(self, key: str) -> bytes:
         # retry with simple backoff sequence injected for tests
         from typing import cast
+        import hashlib
         seq = cast(list[float], globals().get("_backoff_sequence") or [0.5, 1.0, 2.0])
         for i, backoff in enumerate(seq + [None]):
             try:
                 obj = self._s3.get_object(Bucket=self._bucket, Key=key)
-                return obj["Body"].read()
+                body = obj["Body"].read()
+                # Optional checksum verification
+                if self._checksum_mode != "skip":
+                    try:
+                        chk_obj = self._s3.get_object(Bucket=self._bucket, Key=f"{key}.CHECKSUM")
+                        expected = chk_obj["Body"].read().decode().strip().split()[0]
+                        actual = hashlib.md5(body).hexdigest()
+                        if expected != actual:
+                            msg = f"Checksum mismatch for {key}: expected {expected}, got {actual}"
+                            if self._checksum_mode == "strict":
+                                raise ValueError(msg)
+                            else:
+                                logger.warning(msg)
+                    except Exception:
+                        # ignore missing checksum file or errors in warn/skip
+                        if self._checksum_mode == "strict":
+                            raise
+                return body
             except Exception as e:  # noqa: BLE001
                 if backoff is None:
                     raise
@@ -185,6 +207,25 @@ class BinanceS3Source(Source):
                 continue
 
 
+    def _extract_meta(self, key: str) -> dict:
+        parts = key.split("/")
+        meta = {"s3_key": key}
+        # naive heuristics: market at index 1, segment at 2, datatype at 3, symbol at 4, date at 5
+        # Adjust if prefix includes a leading folder
+        for i, p in enumerate(parts):
+            if p in ("spot", "um_futures", "cm_futures"):
+                meta["market"] = p
+                if i + 1 < len(parts):
+                    meta["segment"] = parts[i + 1]
+                if i + 2 < len(parts):
+                    meta["datatype"] = parts[i + 2]
+                if i + 3 < len(parts):
+                    meta["symbol"] = parts[i + 3]
+                if i + 4 < len(parts):
+                    meta["date"] = parts[i + 4]
+                break
+        return meta
+
     def run(self):
         import time as _t
         # expose alias on module for tests
@@ -209,8 +250,14 @@ class BinanceS3Source(Source):
                         else:
                             _time.sleep(delta)
                 prev_ts = ts
+                # attach metadata if enabled
+                value = record
+                if self._extract_metadata:
+                    meta = self._extract_meta(key)
+                    if isinstance(value, dict):
+                        value = {**value, "meta": meta}
                 msg = self.producer_topic.serialize(
-                    key=self._key_setter(record), value=record, timestamp_ms=ts
+                    key=self._key_setter(record), value=value, timestamp_ms=ts
                 )
                 self.produce(key=msg.key, value=msg.value, timestamp=msg.timestamp)
         self.producer.flush()

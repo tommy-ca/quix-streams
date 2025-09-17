@@ -1,6 +1,6 @@
 # Crypto Source: Cryptofeed (Draft Spec)
 
-Status: Draft
+Status: Ready
 Owner: quix-streams community
 
 1. Problem
@@ -60,3 +60,16 @@ sdf = app.dataframe(source=source)
 sdf.print(metadata=True)
 app.run()
 ```
+
+11. Installation and extras
+- pip install quixstreams[crypto]
+
+12. Configuration summary
+- exchanges (list[str], default: ["BINANCE"]) 
+- channels (list[str], default: ["trades","ticker"]) 
+- symbols (list[str] | None)
+- normalize (bool, default: true)
+- reconnect (bool, default: true)
+- max_retries (int | None, default: None)
+- backoff (implicit exponential, capped)
+- key_setter, timestamp_setter (callables)

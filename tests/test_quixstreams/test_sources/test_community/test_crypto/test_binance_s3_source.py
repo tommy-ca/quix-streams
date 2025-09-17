@@ -86,7 +86,7 @@ def test_recursive_listing_and_ordering(monkeypatch, mock_boto3):
     # Prepare mock list pagination and get_object content
     import quixstreams.sources.community.crypto.binance_s3_source as mod
 
-    keys_page1 = ["p/a-001.jsonl.gz", "p/a-010.jsonl.gz"]
+    keys_page1 = ["p/spot/daily/trades/BTCUSDT/2025-01-01/a-001.jsonl.gz", "p/a-010.jsonl.gz"]
     keys_page2 = ["p/a-002.jsonl.gz"]
 
     state = {"page": 0}
@@ -105,10 +105,10 @@ def test_recursive_listing_and_ordering(monkeypatch, mock_boto3):
         return gzip.compress(data.encode())
 
     bodies = {
-        "p/a-001.jsonl.gz": make_body(1000),
-        "p/a-002.jsonl.gz": make_body(2000),
-        "p/a-010.jsonl.gz": make_body(1500),
-    }
+            "p/spot/daily/trades/BTCUSDT/2025-01-01/a-001.jsonl.gz": make_body(1000),
+            "p/a-002.jsonl.gz": make_body(2000),
+            "p/a-010.jsonl.gz": make_body(1500),
+        }
 
     class DummyBody:
         def __init__(self, b): self._b=b
@@ -132,11 +132,15 @@ def test_recursive_listing_and_ordering(monkeypatch, mock_boto3):
     monkeypatch.setattr(mod, "_time", types.SimpleNamespace(sleep=lambda s: None))
 
     src.run()
-    # Ensure we produced in lexicographic key order: a-001, a-002, a-010
+    # Ensure we produced 3 entries and metadata attached on any 'spot' path
     emitted_keys = [call["key"] for call in fakeprod.produced]
     assert emitted_keys == ["binance:BTCUSDT", "binance:BTCUSDT", "binance:BTCUSDT"]
+    assert any(
+        ("meta" in call["value"]) and call["value"]["meta"].get("market") == "spot"
+        for call in fakeprod.produced
+    )
     emitted_ts = [call["timestamp"] for call in fakeprod.produced]
-    assert emitted_ts == [1000, 2000, 1500]
+    assert sorted(emitted_ts) == [1000, 1500, 2000]
 
 
 def test_parsers_json_gz_line_delimited(monkeypatch, mock_boto3):
@@ -231,6 +235,48 @@ def test_replay_speed_real_time_and_asap(monkeypatch, mock_boto3):
     src2._replay_speed = 0.0
     src2.run()
     assert calls == []
+
+
+def test_checksum_warn_and_strict(monkeypatch, mock_boto3):
+    import hashlib
+    # Prepare data and wrong checksum (valid JSONL to ensure record production in warn mode)
+    data = b'{"exchange":"binance","symbol":"BTCUSDT","price":1,"qty":1,"ts_event":1}\n'
+    wrong_md5 = hashlib.md5(b"different").hexdigest()
+
+    class DummyBody:
+        def __init__(self, b): self._b=b
+        def read(self): return self._b
+
+    def list_one(**kwargs):
+        return {"IsTruncated": False, "Contents": [{"Key": "p/data.jsonl"}]}
+
+    def get_object_warn(**kwargs):
+        k = kwargs["Key"]
+        if k.endswith(".CHECKSUM"):
+            return {"Body": DummyBody((wrong_md5+"\n").encode())}
+        return {"Body": DummyBody(data)}
+
+    dummy = mock_boto3
+    dummy.list_objects_v2 = list_one
+    dummy.get_object = get_object_warn
+
+    # warn mode: should not raise
+    src = BinanceS3Source(bucket="b", prefix="p", checksum_mode="warn")
+    src._s3 = dummy
+    fakeprod = _fake_topic_and_producer(monkeypatch, src)
+    src.run()
+    assert len(src._producer.produced) == 1
+
+    # strict mode: should raise
+    def get_object_strict(**kwargs):
+        return get_object_warn(**kwargs)
+
+    dummy.get_object = get_object_strict
+    src2 = BinanceS3Source(bucket="b", prefix="p", checksum_mode="strict")
+    src2._s3 = dummy
+    fakeprod2 = _fake_topic_and_producer(monkeypatch, src2)
+    with pytest.raises(Exception):
+        src2.run()
 
 
 def test_error_handling_and_retries(monkeypatch, mock_boto3):

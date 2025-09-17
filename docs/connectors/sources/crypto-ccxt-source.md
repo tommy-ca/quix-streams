@@ -1,6 +1,6 @@
 # Crypto Source: CCXT (Draft Spec)
 
-Status: Draft
+Status: Ready
 Owner: quix-streams community
 
 1. Problem
@@ -59,3 +59,18 @@ sdf = app.dataframe(source=source)
 sdf.print(metadata=True)
 app.run()
 ```
+
+10. Installation and extras
+- pip install quixstreams[crypto]
+- Optional WS: pip install quixstreams[crypto_ws]
+
+11. Configuration summary
+- exchange (str, default: "binance")
+- mode ("klines"|"trades"|"orderbook", default: "klines")
+- interval (str for klines, default: "1m")
+- symbols (list[str], required)
+- use_ws (bool, default: false)
+- rest_poll_interval (float | None)
+- rate_limit (bool, default: true)
+- normalize (bool, default: true)
+- key_setter, timestamp_setter (callables)

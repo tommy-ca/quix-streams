@@ -60,6 +60,15 @@ Owner: quix-streams community
 - stop(): close client and flush producer
 
 8. Error handling
+- Optional checksum verification: looks for a sibling ".CHECKSUM" object (md5 hex) for each data object and validates against the object's raw bytes.
+  - checksum_mode: "skip" (default), "warn" (log a warning on mismatch), "strict" (raise and stop)
+- Transient S3 errors (5xx, throttling) retried with exponential backoff up to N attempts
+- Non-retriable errors logged and file skipped; metrics hooks planned later
+
+9. Metadata extraction
+- When enabled, extracts metadata from the S3 key path: { market, segment (daily/monthly), datatype, symbol, date, s3_key } and attaches under value.meta.
+- Heuristics assume a folder structure like: {market}/{segment}/{datatype}/{symbol}/{date}/file.ext
+- Always includes s3_key in metadata for provenance
 - Transient S3 errors (5xx, throttling) retried with exponential backoff up to N attempts
 - Non-retriable errors logged and file skipped; metrics hooks planned later
 
