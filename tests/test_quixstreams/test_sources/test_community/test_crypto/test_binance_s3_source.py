@@ -141,22 +141,40 @@ def test_recursive_listing_and_ordering(monkeypatch, mock_boto3):
 
 def test_parsers_json_gz_line_delimited(monkeypatch, mock_boto3):
     import quixstreams.sources.community.crypto.binance_s3_source as mod
-    import json, gzip
+    import json, gzip, zipfile, io
 
     def list_one(**kwargs):
-        return {"IsTruncated": False, "Contents": [{"Key": "p/data.jsonl.gz"}]}
+        return {"IsTruncated": False, "Contents": [{"Key": "p/data.jsonl.gz"}, {"Key": "p/zip.jsonl.zip"}, {"Key": "p/klines.csv"}]}
 
     lines = [
         {"exchange":"binance","symbol":"BTCUSDT","price":100,"qty":1,"ts_event":1},
         {"exchange":"binance","symbol":"BTCUSDT","price":101,"qty":2,"ts_event":2},
     ]
-    buf = gzip.compress("\n".join(json.dumps(l) for l in lines).encode())
+    buf_gz = gzip.compress("\n".join(json.dumps(l) for l in lines).encode())
+
+    # zip with a jsonl file
+    zbuf = io.BytesIO()
+    with zipfile.ZipFile(zbuf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('inner.jsonl', "\n".join(json.dumps(l) for l in lines))
+    buf_zip = zbuf.getvalue()
+
+    # CSV klines row: [open_time, open, high, low, close, volume, close_time]
+    csv_text = "open_time,open,high,low,close,volume,close_time\n1000,10,12,9,11,100,1060\n"
+    buf_csv = csv_text.encode()
 
     class DummyBody: 
-        def read(self): return buf
+        def __init__(self, b): self._b=b
+        def read(self): return self._b
 
     def get_object(**kwargs):
-        return {"Body": DummyBody()}
+        key = kwargs["Key"].split('/')[-1]
+        if key.endswith('gz'):
+            return {"Body": DummyBody(buf_gz)}
+        if key.endswith('zip'):
+            return {"Body": DummyBody(buf_zip)}
+        if key.endswith('csv'):
+            return {"Body": DummyBody(buf_csv)}
+        raise AssertionError("unexpected key")
 
     dummy = mock_boto3
     dummy.calls.clear()
@@ -167,12 +185,11 @@ def test_parsers_json_gz_line_delimited(monkeypatch, mock_boto3):
     src._s3 = dummy
     fakeprod = _fake_topic_and_producer(monkeypatch, src)
 
-    # Not needed after implementation; kept for clarity
-
     src.run()
-    assert len(fakeprod.produced) == 2
-    assert fakeprod.produced[0]["value"]["price"] == 100
-    assert fakeprod.produced[1]["value"]["qty"] == 2
+    # gz two, zip two, csv one → total 5
+    assert len(fakeprod.produced) == 5
+    # verify at least one record uses close_time as ts (CSV klines)
+    assert any(call["timestamp"] == 1060 for call in fakeprod.produced)
 
 
 def test_replay_speed_real_time_and_asap(monkeypatch, mock_boto3):

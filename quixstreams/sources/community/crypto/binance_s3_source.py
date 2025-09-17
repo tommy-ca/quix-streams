@@ -134,14 +134,50 @@ class BinanceS3Source(Source):
         raise RuntimeError("unreachable")
 
     def _iter_records_from_body(self, key: str, body: bytes) -> Iterable[dict]:
-        # infer gzip by extension
+        # Handle gzip/zip/csv/jsonl
         import gzip as _gzip
-        raw = _gzip.decompress(body) if key.endswith(".gz") else body
+        import io as _io
+        import zipfile as _zip
+        import csv as _csv
+        import json
+
+        raw = body
+        if key.endswith(".gz"):
+            raw = _gzip.decompress(body)
+        elif key.endswith(".zip"):
+            with _io.BytesIO(body) as bio, _zip.ZipFile(bio) as zf:
+                # take first file
+                first = zf.namelist()[0]
+                raw = zf.read(first)
+
+        # CSV klines (simple mapping) when .csv
+        if key.endswith(".csv"):
+            text = raw.decode()
+            reader = _csv.DictReader(text.splitlines())
+            for row in reader:
+                try:
+                    ev = {
+                        "exchange": "binance",
+                        "symbol": "unknown",
+                        "open_time": int(row["open_time"]),
+                        "open": float(row["open"]),
+                        "high": float(row["high"]),
+                        "low": float(row["low"]),
+                        "close": float(row["close"]),
+                        "volume": float(row["volume"]),
+                        "close_time": int(row["close_time"]),
+                    }
+                except Exception:
+                    logger.warning("Skipping malformed csv row in %s", key)
+                    continue
+                yield ev
+            return
+
+        # Default: JSONL
         for line in raw.splitlines():
             line = line.strip()
             if not line:
                 continue
-            import json
             try:
                 yield json.loads(line)
             except Exception:  # noqa: BLE001
@@ -160,7 +196,10 @@ class BinanceS3Source(Source):
         for key in keys:
             body = self._read_object(key)
             for record in self._iter_records_from_body(key, body):
+                # For CSV klines, prefer close_time as ts if timestamp not set
                 ts = self._timestamp_setter(record)
+                if ts is None and "close_time" in record:
+                    ts = int(record["close_time"])
                 if prev_ts is not None and self._replay_speed and self._replay_speed > 0:
                     delta = max(0.0, (ts - prev_ts) / 1000.0) * self._replay_speed
                     if delta > 0:

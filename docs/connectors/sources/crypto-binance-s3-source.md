@@ -1,9 +1,10 @@
 # Crypto Source: Binance S3 (Draft Spec)
 
-Status: Draft
+Status: Ready
 Owner: quix-streams community
 
 1. Problem
+- Support multiple Binance archive access patterns (segments/kinds) across markets (spot, futures) and granularities (daily/monthly), including templated path generation by symbol/date/interval.
 - Backfill historical crypto data from Binance public archives stored in S3 into Kafka for downstream processing and lakehouse ingestion.
 
 2. Goals
@@ -21,6 +22,14 @@ Owner: quix-streams community
 - pip install quixstreams[aws]
 
 5. Configuration (proposed)
+- Access modes:
+  - direct_prefix: use a single prefix (existing behaviour)
+  - templated_prefixes: generate multiple prefixes using a template and symbol/date iteration
+- prefix_template (templated_prefixes mode): e.g. "data/binance/spot/daily/{datatype}/{symbol}/{date}/"
+- symbols: list[str]
+- date_from/date_to: YYYY-MM-DD inclusive (daily segments)
+- interval: e.g., "1m" for klines (used in filenames)
+- market: "spot"|"um_futures"|"cm_futures" (informational in v1)
 - bucket: str (required)
 - prefix: str (path prefix to files; required)
 - unsigned: bool = false (use anonymous access)
@@ -34,6 +43,8 @@ Owner: quix-streams community
 - timestamp_setter(record) -> int ms; default uses record's event timestamp if present
 
 6. Topics and schema
+- CSV klines mapping: [open_time, open, high, low, close, volume, close_time, ...] -> normalized fields; ts_event set to close_time.
+- ZIP archives: first file entry is decompressed and parsed as JSONL.
 - Default topic name: crypto.source.binance.s3.{datatype}
 - Key default: "binance:{symbol}"
 - Value default: JSON dictionary; normalized minimal shape for trades:
@@ -69,3 +80,19 @@ sdf.print(metadata=True)
 
 app.run()
 ```
+
+11. Installation and extras
+- pip install quixstreams[aws]
+
+12. Configuration summary
+- bucket (str, required)
+- prefix (str, required)
+- unsigned (bool, default: false)
+- region_name, endpoint_url, aws_access_key_id, aws_secret_access_key (optional)
+- file_format ("infer"|"jsonl"|"csv", default: "infer")
+- compression ("infer"|"gzip"|"zip"|"none", default: "infer")
+- datatype ("trades"|"klines"|"orderbook", default: "trades")
+- replay_speed (float, default: 0.0)
+- has_partition_folders (bool, default: false)
+- key_setter (callable)
+- timestamp_setter (callable)
