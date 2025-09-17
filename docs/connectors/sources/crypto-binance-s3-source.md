@@ -53,6 +53,10 @@ Examples of patterns
     - p/spot/monthly/klines/BTCUSDT/
 
 Example usage
+
+Fixture/manifest generation (dry run)
+- You can set dry_run=True to skip fetching objects while iterating prefixes/keys.
+- This is convenient for creating local manifests of keys to download later.
 ```python
 from quixstreams import Application
 from quixstreams.sources.community.crypto import BinanceS3Source

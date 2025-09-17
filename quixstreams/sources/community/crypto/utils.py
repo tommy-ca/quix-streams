@@ -98,3 +98,62 @@ def exponential_backoff(base: float = 0.5, factor: float = 2.0, max_sleep: float
     while True:
         yield min(sleep, max_sleep)
         sleep *= factor
+
+
+def expand_dataloader_prefixes(
+    prefix_template: str,
+    *,
+    market: str,
+    segments: list[str],
+    datatypes: list[str],
+    symbols: list[str],
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    interval: Optional[str] = None,
+    root: Optional[str] = None,
+) -> list[str]:
+    """
+    Generate concrete prefixes for the dataloader pattern.
+    Dates are expanded for daily segment when date_from and date_to are provided.
+    """
+    from datetime import datetime, timedelta
+
+    dates: list[str] = []
+    if date_from and date_to:
+        start = datetime.strptime(date_from, "%Y-%m-%d")
+        end = datetime.strptime(date_to, "%Y-%m-%d")
+        cur = start
+        while cur <= end:
+            dates.append(cur.strftime("%Y-%m-%d"))
+            cur += timedelta(days=1)
+
+    out: list[str] = []
+    for seg in segments:
+        for dt in datatypes:
+            for sym in symbols:
+                if seg == "daily" and dates:
+                    for d in dates:
+                        out.append(
+                            prefix_template.format(
+                                root=root or "",
+                                market=market or "",
+                                segment=seg,
+                                datatype=dt,
+                                symbol=sym,
+                                date=d,
+                                interval=interval or "",
+                            )
+                        )
+                else:
+                    out.append(
+                        prefix_template.format(
+                            root=root or "",
+                            market=market or "",
+                            segment=seg,
+                            datatype=dt,
+                            symbol=sym,
+                            date="",
+                            interval=interval or "",
+                        )
+                    )
+    return out

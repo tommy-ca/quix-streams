@@ -68,6 +68,7 @@ class BinanceS3Source(Source):
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
         interval: Optional[str] = None,
+        dry_run: bool = False,
         name: Optional[str] = None,
         shutdown_timeout: float = 30.0,
         on_client_connect_success: Optional[ClientConnectSuccessCallback] = None,
@@ -116,6 +117,7 @@ class BinanceS3Source(Source):
         self._date_from = date_from
         self._date_to = date_to
         self._interval = interval or ""
+        self._dry_run = dry_run
 
         self._s3 = None
 
@@ -309,6 +311,9 @@ class BinanceS3Source(Source):
         keys = sorted(list(self._iter_object_keys()))
         prev_ts = None
         for key in keys:
+            if self._dry_run:
+                # skip fetching and producing; proceed to next key
+                continue
             body = self._read_object(key)
             for record in self._iter_records_from_body(key, body):
                 # For CSV klines, prefer close_time as ts if timestamp not set

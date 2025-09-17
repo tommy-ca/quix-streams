@@ -366,6 +366,42 @@ def test_replay_speed_real_time_and_asap(monkeypatch, mock_boto3):
     assert calls == []
 
 
+def test_dataloader_dry_run_lists_without_fetching(monkeypatch, mock_boto3):
+    # Ensure that dry_run does not call get_object and produces nothing
+    calls = {"listed": 0, "fetched": 0}
+    def list_objects_v2(**kwargs):
+        calls["listed"] += 1
+        pref = kwargs["Prefix"]
+        return {"IsTruncated": False, "Contents": [{"Key": f"{pref}file1.jsonl.gz"}, {"Key": f"{pref}file2.jsonl.gz"}]}
+    def get_object(**kwargs):
+        calls["fetched"] += 1
+        raise AssertionError("should not fetch in dry_run")
+
+    dummy = mock_boto3
+    dummy.list_objects_v2 = list_objects_v2
+    dummy.get_object = get_object
+
+    src = BinanceS3Source(
+        bucket="b",
+        prefix="p/",
+        access_mode="templated_prefixes",
+        prefix_template="p/{market}/{segment}/{datatype}/{symbol}/{date}/",
+        market="spot",
+        segments=["daily"],
+        datatypes_list=["trades"],
+        symbols=["BTCUSDT"],
+        date_from="2025-01-01",
+        date_to="2025-01-02",
+        dry_run=True,
+    )
+    src._s3 = dummy
+    fakeprod = _fake_topic_and_producer(monkeypatch, src)
+    src.run()
+    assert calls["listed"] == 2  # two dates
+    assert calls["fetched"] == 0
+    assert len(fakeprod.produced) == 0
+
+
 def test_checksum_warn_and_strict(monkeypatch, mock_boto3):
     import hashlib
     # Prepare data and wrong checksum (valid JSONL to ensure record production in warn mode)
