@@ -4,7 +4,7 @@
 
 The Iceberg REST Sink is a production-ready Apache Iceberg sink implementation for QuixStreams that enables high-performance streaming data ingestion into data lakehouses via REST catalog APIs. This sink replaces AWS Glue dependencies with REST-based catalog operations, providing broader compatibility with cloud providers, on-premises deployments, and local development environments.
 
-**Current Implementation Status**: The core architecture is ~70% complete with 4600+ lines of production-ready code including:
+**Current Implementation Status**: The implementation is 95%+ complete (6232 lines) with production-ready code including:
 - ✅ Configuration management (CatalogConfig, StorageConfig, IcebergConfig)
 - ✅ Error hierarchy with 12+ error types and structured context
 - ✅ REST catalog client with HTTP operations and authentication
@@ -13,7 +13,7 @@ The Iceberg REST Sink is a production-ready Apache Iceberg sink implementation f
 - ✅ Schema processing (auto-detection, nested data handling)
 - ✅ Core sink lifecycle and QuixStreams integration
 
-**Remaining Work (~30%)**: Complete Iceberg table operations, observability infrastructure, and comprehensive testing.
+**Remaining Work (~5%)**: Optional developer tooling enhancements and production validation.
 
 **Purpose**: This feature delivers high-throughput, low-latency streaming data ingestion with schema-agnostic design supporting any structured data format through parameterized schemas and configurable optimizations.
 

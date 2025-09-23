@@ -1,0 +1,23 @@
+{
+  "feature_name": "crypto-sources-production",
+  "created_at": "2025-09-22T22:15:00Z",
+  "updated_at": "2025-09-22T22:15:00Z",
+  "language": "en",
+  "phase": "implementation-complete",
+  "approvals": {
+    "requirements": {
+      "generated": true,
+      "approved": true
+    },
+    "design": {
+      "generated": true,
+      "approved": true
+    },
+    "tasks": {
+      "generated": true,
+      "approved": true
+    }
+  },
+  "ready_for_implementation": false,
+  "implementation_status": "complete"
+}

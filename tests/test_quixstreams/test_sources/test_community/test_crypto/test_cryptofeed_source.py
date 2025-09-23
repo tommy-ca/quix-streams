@@ -3,6 +3,7 @@ import sys
 import pytest
 
 from quixstreams.sources.community.crypto.cryptofeed_source import CryptofeedSource
+from quixstreams.sources.community.crypto.config import CryptofeedConfig, RetryConfig
 
 
 def test_import_guard_when_missing_cryptofeed(monkeypatch):
@@ -58,7 +59,13 @@ def test_trade_event_mapping(monkeypatch):
     fake_mod = types.SimpleNamespace(FeedHandler=FakeFeedHandler)
     monkeypatch.setitem(sys.modules, "cryptofeed", fake_mod)
 
-    src = CryptofeedSource(exchanges=["BINANCE"], channels=["trades"], symbols=["BTC-USDT"], normalize=True)
+    config = CryptofeedConfig(
+        exchanges=["BINANCE"],
+        channels=["trades"],
+        symbols=["BTC-USDT"],
+        normalize=True,
+    )
+    src = CryptofeedSource(config)
     _wire_fake_io(src)
     src.setup()
 
@@ -95,18 +102,27 @@ def test_reconnect_backoff_and_shutdown(monkeypatch):
     monkeypatch.setitem(sys.modules, "cryptofeed", fake_mod)
 
     # Patch time alias to capture sleeps
-    import quixstreams.sources.community.crypto.cryptofeed_source as mod
     sleeps = []
-    monkeypatch.setattr(mod, "_time", types.SimpleNamespace(sleep=lambda s: sleeps.append(s)))
+    monkeypatch.setattr(
+        "quixstreams.sources.community.crypto.retry.time.sleep",
+        lambda s: sleeps.append(s),
+    )
 
-    src = CryptofeedSource(exchanges=["BINANCE"], channels=["trades","ticker"], symbols=["BTC-USDT"], reconnect=True, max_retries=2)
+    config = CryptofeedConfig(
+        exchanges=["BINANCE"],
+        channels=["trades", "ticker"],
+        symbols=["BTC-USDT"],
+        reconnect=True,
+        retry_config=RetryConfig(base_delay=0.25, backoff_factor=3.0, max_retries=2),
+    )
+    src = CryptofeedSource(config)
     _wire_fake_io(src)
     src.setup()
 
     # Run in a try/catch-less environment; run() should handle internal retry once
     src.run()
     # We expect a backoff sleep to have occurred once
-    assert sleeps, "expected backoff sleep to occur"
+    assert sleeps == [0.25], "expected configured backoff interval"
 
     # Now test shutdown calls stop()
     fh = src._fh
