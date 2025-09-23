@@ -2,10 +2,18 @@
 """Generate a manifest of S3 object keys for given dataloader configuration."""
 import json
 import os
+import sys
 from typing import Any
+
+# Ensure local package is importable when running from repo root
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
 try:
     import boto3  # type: ignore
+    import botocore  # type: ignore
+    from botocore.config import Config as BotoConfig  # type: ignore
 except Exception as e:
     raise SystemExit("Install boto3 to use this script: pip install boto3")
 
@@ -38,7 +46,17 @@ def main() -> None:
         root=root,
     )
 
-    s3 = boto3.client("s3")
+    # Configure S3 client: default to unsigned for public archives
+    unsigned = os.environ.get("UNSIGNED", "true").lower() in {"1","true","yes","y"}
+    region = os.environ.get("REGION_NAME")
+    endpoint_url = os.environ.get("ENDPOINT_URL")
+    aws_access_key_id = os.environ.get("AWS_ACCESS_KEY_ID")
+    aws_secret_access_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
+
+    cfg = BotoConfig(signature_version=botocore.UNSIGNED) if unsigned else None
+    client_kwargs = {k:v for k,v in dict(region_name=region, endpoint_url=endpoint_url, aws_access_key_id=aws_access_key_id, aws_secret_access_key=aws_secret_access_key).items() if v}
+    s3 = boto3.client("s3", config=cfg, **client_kwargs)
+
     manifest: list[dict[str, Any]] = []
     for pref in prefixes:
         token = None

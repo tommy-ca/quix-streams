@@ -1,0 +1,62 @@
+# Real-Time Crypto Trading Data Pipeline Template
+# 
+# This template configures a Cryptofeed source for real-time Binance spot trading data
+# connected to an Iceberg REST sink for lakehouse storage.
+#
+# Usage:
+#   python -m quixstreams.templates.loader real-time-trading.yaml
+#
+# Environment Variables:
+#   KAFKA_BOOTSTRAP_SERVERS: Kafka cluster address (default: localhost:9092)
+#   ICEBERG_CATALOG_URI: Iceberg REST catalog endpoint (default: http://localhost:8181)
+#   ICEBERG_TABLE_NAME: Target table name (default: crypto.realtime_trades)
+
+# Kafka Configuration
+kafka:
+  bootstrap_servers: "${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}"
+  auto_offset_reset: "latest"
+
+# QuixStreams Application Configuration  
+application:
+  app_id: "crypto-realtime-trading"
+  
+# Crypto Source Configuration
+crypto_source:
+  type: "cryptofeed"
+  config:
+    exchanges: ["binance"]
+    channels: ["trades"]
+    symbols: ["BTCUSDT", "ETHUSDT", "ADAUSDT", "DOTUSDT"]
+    # Optional: configure authentication if needed
+    # auth_provider:
+    #   type: "api_key"
+    #   api_key: "${BINANCE_API_KEY}"
+    #   api_secret: "${BINANCE_API_SECRET}"
+    
+# Iceberg REST Sink Configuration
+iceberg_sink:
+  catalog_uri: "${ICEBERG_CATALOG_URI:http://localhost:8181}"
+  table_name: "${ICEBERG_TABLE_NAME:crypto.realtime_trades}"
+  storage:
+    endpoint: "http://localhost:9000"  # MinIO for local development
+    bucket: "lakehouse"
+    prefix: "crypto/realtime/"
+    credentials:
+      access_key: "${S3_ACCESS_KEY:minioadmin}"
+      secret_key: "${S3_SECRET_KEY:minioadmin}"
+
+# Topic Configuration
+topics:
+  crypto_trades:
+    name: "crypto.trades"
+    partitions: 3
+    replication_factor: 1
+
+# Data Flow Configuration
+pipeline:
+  source_topic: "crypto.trades"
+  sink_topic: "crypto.trades"
+  # Optional transformations
+  transformations:
+    - normalize_schema: true
+    - add_processing_timestamp: true

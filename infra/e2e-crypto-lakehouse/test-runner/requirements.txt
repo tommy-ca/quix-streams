@@ -1,0 +1,24 @@
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-mock==3.12.0
+pytest-benchmark==4.0.0
+pytest-timeout==2.2.0
+testcontainers[postgres]==4.12.0
+docker>=7.1.0
+requests>=2.31.0
+websockets>=12.0
+aiohttp>=3.9.0
+
+# QuixStreams dependencies
+confluent-kafka>=2.3.0
+fastavro>=1.8,<2.0
+protobuf>=5.27.2,<7.0
+pyiceberg[pyarrow,glue]>=0.7
+boto3>=1.35.65,<2.0
+boto3-stubs>=1.35.65,<2.0
+pandas>=1.0.0,<3.0
+psycopg2-binary>=2.9,<3
+
+# Crypto dependencies  
+cryptofeed>=2.4.0
+ccxt>=4.0.0

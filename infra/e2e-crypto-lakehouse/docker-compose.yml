@@ -1,0 +1,270 @@
+version: '3.8'
+
+services:
+  # Redpanda - Kafka-compatible streaming platform
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v23.3.3
+    container_name: e2e-redpanda
+    command:
+      - redpanda
+      - start
+      - --node-id 0
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+      - --advertise-pandaproxy-addr internal://redpanda:8082,external://localhost:18082
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+      - --mode dev-container
+      - --smp 1
+      - --default-log-level=info
+    ports:
+      - "18081:8081"   # Schema Registry
+      - "18082:8082"   # Pandaproxy (REST API)
+      - "19092:9092"   # Kafka API (external)
+      - "19644:9644"   # Admin API
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true' || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - crypto-lakehouse
+
+  # MinIO - S3-compatible object storage
+  minio:
+    image: minio/minio:RELEASE.2024-01-16T16-07-38Z
+    container_name: e2e-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web Console
+    volumes:
+      - minio_data:/data
+      - ./test-data:/test-data:ro  # Mount test data directory
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - crypto-lakehouse
+
+  # Setup MinIO buckets and test data
+  minio-setup:
+    image: minio/mc:RELEASE.2024-01-13T05-33-17Z
+    container_name: e2e-minio-setup
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Setting up MinIO...'
+      /usr/bin/mc alias set minio http://minio:9000 minioadmin minioadmin;
+      
+      # Create buckets
+      /usr/bin/mc mb minio/crypto-dev --ignore-existing;
+      /usr/bin/mc mb minio/lakehouse --ignore-existing;
+      /usr/bin/mc mb minio/binance-public-data --ignore-existing;
+      
+      # Set policies  
+      /usr/bin/mc policy set public minio/crypto-dev;
+      /usr/bin/mc policy set public minio/lakehouse;
+      /usr/bin/mc policy set public minio/binance-public-data;
+      
+      # Upload test data if exists
+      if [ -d '/test-data/binance' ]; then
+        echo 'Uploading Binance test data...'
+        /usr/bin/mc cp --recursive /test-data/binance/ minio/binance-public-data/data/;
+      fi
+      
+      echo 'MinIO setup complete!'
+      exit 0;
+      "
+    volumes:
+      - ./test-data:/test-data:ro
+    networks:
+      - crypto-lakehouse
+
+  # PostgreSQL - Database for Lakekeeper catalog
+  postgres:
+    image: postgres:15
+    container_name: e2e-postgres
+    environment:
+      POSTGRES_DB: lakekeeper
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d lakekeeper"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - crypto-lakehouse
+
+  # Lakekeeper - REST Catalog for Iceberg
+  lakekeeper:
+    image: quay.io/lakekeeper/catalog:latest-main
+    container_name: e2e-lakekeeper
+    environment:
+      LAKEKEEPER__PG_ENCRYPTION_KEY: "This-is-NOT-Secure-Change-In-Production!"
+      LAKEKEEPER__PG_DATABASE_URL_READ: "postgresql://postgres:postgres@postgres:5432/lakekeeper"
+      LAKEKEEPER__PG_DATABASE_URL_WRITE: "postgresql://postgres:postgres@postgres:5432/lakekeeper"
+      RUST_LOG: "info,lakekeeper=debug"
+    ports:
+      - "8181:8181"   # REST Catalog API
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8181/management/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    networks:
+      - crypto-lakehouse
+
+  # Bootstrap Lakekeeper with test warehouse
+  lakekeeper-bootstrap:
+    image: curlimages/curl:latest
+    container_name: e2e-lakekeeper-bootstrap
+    depends_on:
+      lakekeeper:
+        condition: service_healthy
+    command: >
+      sh -c "
+      echo 'Bootstrapping Lakekeeper...'
+      curl -w '%{http_code}' -X POST 'http://lakekeeper:8181/management/v1/bootstrap' \
+        -H 'Content-Type: application/json' \
+        -d '{\"accept-terms-of-use\": true}' \
+        -o /dev/null
+      echo ''
+      echo 'Creating warehouse...'
+      curl -w '%{http_code}' -X POST 'http://lakekeeper:8181/management/v1/warehouse' \
+        -H 'Content-Type: application/json' \
+        -d '{
+          \"warehouse-name\": \"e2e-test\",
+          \"project-id\": \"00000000-0000-0000-0000-000000000000\",
+          \"storage-profile\": {
+            \"type\": \"s3\",
+            \"bucket\": \"lakehouse\",
+            \"key-prefix\": \"warehouse/\",
+            \"assume-role-arn\": null,
+            \"endpoint\": \"http://minio:9000\",
+            \"region\": \"us-east-1\",
+            \"path-style-access\": true,
+            \"sts-enabled\": false
+          },
+          \"storage-credential\": {
+            \"type\": \"s3\",
+            \"credential-type\": \"access-key\",
+            \"aws-access-key-id\": \"minioadmin\",
+            \"aws-secret-access-key\": \"minioadmin\"
+          }
+        }' \
+        -o /dev/null
+      echo ''
+      echo 'Bootstrap complete!'
+      "
+    networks:
+      - crypto-lakehouse
+
+  # Mock crypto exchange for testing (WebSocket server)
+  mock-crypto-exchange:
+    build:
+      context: .
+      dockerfile: mock-exchange/Dockerfile
+    container_name: e2e-mock-crypto-exchange
+    ports:
+      - "8888:8888"   # WebSocket port
+      - "8889:8889"   # REST API port
+    environment:
+      - WS_PORT=8888
+      - REST_PORT=8889
+      - SYMBOLS=BTC-USD,ETH-USD,DOT-USD
+      - CHANNELS=trades,ticker,book
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8889/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - crypto-lakehouse
+
+  # Test runner - QuixStreams application runner
+  test-runner:
+    build:
+      context: ../..
+      dockerfile: infra/e2e-crypto-lakehouse/test-runner/Dockerfile
+    container_name: e2e-test-runner
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      lakekeeper-bootstrap:
+        condition: service_completed_successfully
+      mock-crypto-exchange:
+        condition: service_healthy
+    environment:
+      # Kafka settings
+      - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
+      # Test configuration
+      - TEST_MODE=e2e
+      - LOG_LEVEL=DEBUG
+      # MinIO/S3 settings
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+      - S3_ENDPOINT_URL=http://minio:9000
+      # Lakekeeper settings
+      - ICEBERG_CATALOG_URL=http://lakekeeper:8181/catalog/v1/e2e-test
+      - ICEBERG_WAREHOUSE=e2e-test
+      # Mock exchange settings
+      - MOCK_EXCHANGE_WS_URL=ws://mock-crypto-exchange:8888
+      - MOCK_EXCHANGE_REST_URL=http://mock-crypto-exchange:8889
+    volumes:
+      - ../../:/workspace:ro
+      - ./test-results:/test-results
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    working_dir: /workspace
+    networks:
+      - crypto-lakehouse
+    # Keep container running for manual testing
+    command: tail -f /dev/null
+
+  # Redpanda Console - Web UI for Kafka monitoring
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console:v2.4.3
+    container_name: e2e-redpanda-console
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yml
+    volumes:
+      - ./console-config.yml:/tmp/config.yml
+    ports:
+      - "8080:8080"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    networks:
+      - crypto-lakehouse
+
+volumes:
+  minio_data:
+    driver: local
+  postgres_data:
+    driver: local
+
+networks:
+  crypto-lakehouse:
+    driver: bridge
