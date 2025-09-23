@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import warnings
 from io import BytesIO
 from pathlib import Path
 from typing import Callable, Iterable, Optional, Union
@@ -9,13 +10,25 @@ try:
     import boto3
     import botocore
     from botocore.config import Config as BotoConfig
+    _BOTO3_AVAILABLE = True
 except ImportError as exc:
     # Import guard; this module will still import, but constructing the source will raise a helpful error
     boto3 = None  # type: ignore
     botocore = None  # type: ignore
     BotoConfig = None  # type: ignore
+    _BOTO3_AVAILABLE = False
+    _BOTO3_IMPORT_ERROR = exc
 
 from quixstreams.sources.base import ClientConnectFailureCallback, ClientConnectSuccessCallback, Source
+from quixstreams.sources.community.crypto.config import (
+    BinanceS3Config,
+    AWSAuth,
+    load_from_env,
+)
+from quixstreams.sources.community.crypto.errors import (
+    missing_dependency_error,
+    connection_error,
+)
 from quixstreams.sources.community.crypto.utils import TopicBuilder, default_key_fn, default_ts_fn
 
 logger = logging.getLogger(__name__)
@@ -40,25 +53,27 @@ class BinanceS3Source(Source):
 
     def __init__(
         self,
+        config: Optional[BinanceS3Config] = None,
         *,
-        bucket: str,
-        prefix: str,
-        unsigned: bool = False,
+        # Backward compatibility parameters
+        bucket: Optional[str] = None,
+        prefix: Optional[str] = None,
+        unsigned: Optional[bool] = None,
         region_name: Optional[str] = None,
         endpoint_url: Optional[str] = None,
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
-        file_format: str = "infer",
-        compression: Optional[str] = "infer",
-        datatype: str = "trades",
-        replay_speed: float = 0.0,
+        file_format: Optional[str] = None,
+        compression: Optional[str] = None,
+        datatype: Optional[str] = None,
+        replay_speed: Optional[float] = None,
         key_setter: Optional[Callable[[dict], object]] = None,
         timestamp_setter: Optional[Callable[[dict], Optional[int]]] = None,
-        has_partition_folders: bool = False,
-        checksum_mode: str = "skip",
-        extract_metadata: bool = True,
+        has_partition_folders: Optional[bool] = None,
+        checksum_mode: Optional[str] = None,
+        extract_metadata: Optional[bool] = None,
         # dataloader (templated_prefixes) options
-        access_mode: str = "direct_prefix",
+        access_mode: Optional[str] = None,
         prefix_template: Optional[str] = None,
         root: Optional[str] = None,
         market: Optional[str] = None,
@@ -68,128 +83,190 @@ class BinanceS3Source(Source):
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
         interval: Optional[str] = None,
-        dry_run: bool = False,
+        dry_run: Optional[bool] = None,
         name: Optional[str] = None,
-        shutdown_timeout: float = 30.0,
+        shutdown_timeout: Optional[float] = None,
         on_client_connect_success: Optional[ClientConnectSuccessCallback] = None,
         on_client_connect_failure: Optional[ClientConnectFailureCallback] = None,
     ) -> None:
+        # Handle configuration - support both new config object and old parameters
+        if config is None:
+            # Backward compatibility: create config from individual parameters
+            if bucket is not None or prefix is not None:
+                warnings.warn(
+                    "Using individual parameters is deprecated. Use BinanceS3Config instead.",
+                    DeprecationWarning,
+                    stacklevel=2
+                )
+                auth_provider = None
+                if aws_access_key_id or aws_secret_access_key:
+                    auth_provider = AWSAuth(
+                        aws_access_key_id=aws_access_key_id,
+                        aws_secret_access_key=aws_secret_access_key,
+                        region_name=region_name,
+                        endpoint_url=endpoint_url
+                    )
+                
+                config_kwargs = dict(
+                    bucket=bucket or "",
+                    prefix=prefix or "",
+                    unsigned=unsigned if unsigned is not None else False,
+                    file_format=file_format or "infer",
+                    compression=compression if compression is not None else "infer",
+                    datatype=datatype or "trades",
+                    replay_speed=replay_speed if replay_speed is not None else 0.0,
+                    has_partition_folders=has_partition_folders if has_partition_folders is not None else False,
+                    checksum_mode=(checksum_mode or "skip"),
+                    extract_metadata=extract_metadata if extract_metadata is not None else True,
+                    access_mode=access_mode or "direct_prefix",
+                    prefix_template=prefix_template,
+                    root=root,
+                    market=market,
+                    segments=segments or ["daily"],
+                    datatypes_list=datatypes_list or [datatype or "trades"],
+                    symbols=symbols or [],
+                    date_from=date_from,
+                    date_to=date_to,
+                    interval=interval,
+                    dry_run=dry_run if dry_run is not None else False,
+                    name=name,
+                    shutdown_timeout=shutdown_timeout if shutdown_timeout is not None else 30.0,
+                    validate_prefix_template=False,
+                )
+                if auth_provider is not None:
+                    config_kwargs["auth_provider"] = auth_provider
+
+                config = BinanceS3Config(**config_kwargs)
+            else:
+                # Try to load from environment
+                try:
+                    config = load_from_env(BinanceS3Config)
+                except Exception:
+                    raise ValueError("Either config or bucket/prefix parameters must be provided")
+        
+        # Import guard with better error handling
+        if not _BOTO3_AVAILABLE or boto3 is None:
+            raise missing_dependency_error("boto3", "BinanceS3Source", "aws")
+
+        self._config = config
+        
         # Name defaults to our desired topic convention so Source.default_topic() aligns with docs
-        default_name = TopicBuilder("binance.s3", datatype=datatype)
+        default_name = TopicBuilder("binance.s3", datatype=config.datatype)
         super().__init__(
-            name=name or default_name,
-            shutdown_timeout=shutdown_timeout,
+            name=config.name or default_name,
+            shutdown_timeout=config.shutdown_timeout,
             on_client_connect_success=on_client_connect_success,
             on_client_connect_failure=on_client_connect_failure,
         )
-
-        if boto3 is None:
-            raise ImportError(
-                "BinanceS3Source requires 'boto3'. Install: pip install quixstreams[aws]"
-            )
-
-        self._bucket = bucket
-        self._prefix = prefix.rstrip("/") + "/" if not prefix.endswith("/") else prefix
-        self._unsigned = unsigned
-        self._credentials = {
-            "region_name": region_name,
-            "aws_access_key_id": aws_access_key_id,
-            "aws_secret_access_key": aws_secret_access_key,
-            "endpoint_url": endpoint_url,
-        }
-        self._file_format = file_format
-        self._compression = compression
-        self._datatype = datatype
-        self._replay_speed = replay_speed
+        
         self._key_setter = key_setter or default_key_fn
         self._timestamp_setter = timestamp_setter or default_ts_fn
-        self._has_partition_folders = has_partition_folders
-        self._checksum_mode = checksum_mode
-        self._extract_metadata = extract_metadata
-        # dataloader config
-        self._access_mode = access_mode
-        self._prefix_template = prefix_template
-        self._root = root or ""
-        self._market = market
-        self._segments = segments or ["daily"]
-        self._datatypes_list = datatypes_list or [datatype]
-        self._symbols = symbols or []
-        self._date_from = date_from
-        self._date_to = date_to
-        self._interval = interval or ""
-        self._dry_run = dry_run
-
         self._s3 = None
+        self._dry_run = getattr(self._config, "dry_run", False)
+        self._replay_speed = getattr(self._config, "replay_speed", 0.0)
+        self._extract_metadata = getattr(self._config, "extract_metadata", True)
+        self._checksum_mode = getattr(self._config, "checksum_mode", "skip").lower()
 
     def setup(self):
-        # validate templated configuration
-        if self._access_mode == "templated_prefixes" and not self._prefix_template:
+        # Configuration is already validated in __post_init__, but check again for safety
+        if self._config.access_mode == "templated_prefixes" and not self._config.prefix_template:
             raise ValueError("'prefix_template' is required when access_mode='templated_prefixes'")
+        
         cfg = None
-        if self._unsigned:
+        if self._config.unsigned:
             # Use unsigned requests for public archives
             cfg = BotoConfig(signature_version=botocore.UNSIGNED)  # type: ignore[attr-defined]
-        self._s3 = boto3.client("s3", config=cfg, **{k: v for k, v in self._credentials.items() if v})
-        # validate access by listing a single key under prefix
-        # In templated mode, we cannot validate every prefix cheaply; validate root prefix only
-        self._s3.list_objects_v2(Bucket=self._bucket, Prefix=self._prefix, MaxKeys=1)
+        
+        # Get credentials from auth provider
+        credentials = self._config.auth_provider.get_credentials()
+        s3_credentials = {k: v for k, v in credentials.items() if v and k in [
+            "aws_access_key_id", "aws_secret_access_key", "region_name", "endpoint_url"
+        ]}
+        
+        try:
+            self._s3 = boto3.client("s3", config=cfg, **s3_credentials)
+            # validate access by listing a single key under prefix
+            # In templated mode, we cannot validate every prefix cheaply; validate root prefix only
+            self._s3.list_objects_v2(Bucket=self._config.bucket, Prefix=self._config.prefix, MaxKeys=1)
+        except Exception as e:
+            # Include bucket information in error message for better debugging
+            error_msg = f"Connection failed for BinanceS3Source"
+            if "credentials" in str(e).lower():
+                error_msg += f": Unable to locate credentials"
+            elif "nosuchbucket" in str(e).lower() or "not exist" in str(e).lower():
+                error_msg += f": Bucket '{self._config.bucket}' does not exist or is not accessible"
+            else:
+                error_msg += f": {str(e)}"
+            
+            from .errors import CryptoSourceConnectionError
+            raise CryptoSourceConnectionError(
+                error_msg,
+                source="BinanceS3Source",
+                context={"bucket": self._config.bucket, "prefix": self._config.prefix, "original_error": str(e)},
+                retryable=False
+            )
 
     def _iter_prefixes(self) -> Iterable[str]:
-        if self._access_mode == "direct_prefix" or not self._prefix_template:
-            yield self._prefix
+        if self._config.access_mode == "direct_prefix" or not self._config.prefix_template:
+            yield self._config.prefix
             return
         # templated dataloader expansion
         from datetime import datetime, timedelta
         dates: list[str] = []
-        if self._date_from and self._date_to:
-            start = datetime.strptime(self._date_from, "%Y-%m-%d")
-            end = datetime.strptime(self._date_to, "%Y-%m-%d")
+        if self._config.date_from and self._config.date_to:
+            start = datetime.strptime(self._config.date_from, "%Y-%m-%d")
+            end = datetime.strptime(self._config.date_to, "%Y-%m-%d")
             cur = start
             while cur <= end:
                 dates.append(cur.strftime("%Y-%m-%d"))
                 cur += timedelta(days=1)
         else:
             dates = []
-        for seg in self._segments:
-            for dt in self._datatypes_list:
-                for sym in (self._symbols or [""]):
+        for seg in self._config.segments:
+            for dt in self._config.datatypes_list:
+                for sym in (self._config.symbols or [""]):
                     if seg == "daily" and dates:
                         for d in dates:
-                            yield self._prefix_template.format(
-                                root=self._root or "",
-                                market=self._market or "",
+                            yield self._config.prefix_template.format(
+                                root=self._config.root or "",
+                                market=self._config.market or "",
                                 segment=seg,
                                 datatype=dt,
                                 symbol=sym,
                                 date=d,
-                                interval=self._interval,
+                                interval=self._config.interval or "",
                             )
                     else:
                         # monthly or unspecified date
-                        yield self._prefix_template.format(
-                            root=self._root or "",
-                            market=self._market or "",
+                        yield self._config.prefix_template.format(
+                            root=self._config.root or "",
+                            market=self._config.market or "",
                             segment=seg,
                             datatype=dt,
                             symbol=sym,
                             date="",
-                            interval=self._interval,
+                            interval=self._config.interval or "",
                         )
 
     def _iter_object_keys(self) -> Iterable[str]:
         for pref in self._iter_prefixes():
-            # normalize double slashes and ensure trailing slash
+            # normalize double slashes but do not force a trailing slash
+            # This allows using file-stem prefixes like "...-YYYY-MM-DD" without extensions.
             npref = pref.replace("//", "/")
-            if not npref.endswith("/"):
-                npref = npref + "/"
             token = None
             while True:
-                kwargs = {"Bucket": self._bucket, "Prefix": npref, "MaxKeys": 1000}
+                kwargs = {"Bucket": self._config.bucket, "Prefix": npref, "MaxKeys": 1000}
                 if token:
                     kwargs["ContinuationToken"] = token
                 resp = self._s3.list_objects_v2(**kwargs)
                 for obj in resp.get("Contents", []) or []:
-                    yield obj["Key"]
+                    key = obj.get("Key")
+                    if not key:
+                        continue
+                    # Skip checksum sidecar files
+                    if key.endswith(".CHECKSUM"):
+                        continue
+                    yield key
                 if resp.get("IsTruncated"):
                     token = resp.get("NextContinuationToken")
                 else:
@@ -204,7 +281,7 @@ class BinanceS3Source(Source):
         body = None
         for i, backoff in enumerate(seq + [None]):
             try:
-                obj = self._s3.get_object(Bucket=self._bucket, Key=key)
+                obj = self._s3.get_object(Bucket=self._config.bucket, Key=key)
                 body = obj["Body"].read()
                 break
             except Exception as e:  # noqa: BLE001
@@ -219,7 +296,7 @@ class BinanceS3Source(Source):
         # Step 2: checksum verification without backoff looping (deterministic)
         if self._checksum_mode != "skip":
             try:
-                chk_obj = self._s3.get_object(Bucket=self._bucket, Key=f"{key}.CHECKSUM")
+                chk_obj = self._s3.get_object(Bucket=self._config.bucket, Key=f"{key}.CHECKSUM")
                 expected = chk_obj["Body"].read().decode().strip().split()[0]
                 actual = hashlib.md5(body).hexdigest()
                 if expected != actual:
@@ -246,36 +323,128 @@ class BinanceS3Source(Source):
         raw = body
         if key.endswith(".gz"):
             raw = _gzip.decompress(body)
+            inner_key = key[:-3]
         elif key.endswith(".zip"):
             with _io.BytesIO(body) as bio, _zip.ZipFile(bio) as zf:
                 # take first file
-                first = zf.namelist()[0]
+                names = zf.namelist()
+                if not names:
+                    return
+                first = names[0]
                 raw = zf.read(first)
+                inner_key = first
+                # handle nested gzip inside zip
+                if inner_key.endswith(".gz"):
+                    try:
+                        raw = _gzip.decompress(raw)
+                        inner_key = inner_key[:-3]
+                    except Exception:
+                        logger.warning("Failed to decompress nested gz in %s", key)
+        else:
+            inner_key = key
 
-        # CSV klines (simple mapping) when .csv
-        if key.endswith(".csv"):
-            text = raw.decode()
-            reader = _csv.DictReader(text.splitlines())
-            for row in reader:
+        def _symbol_from_path(k: str) -> str:
+            parts = k.split("/")
+            # try to locate after 'trades' or 'klines'
+            for tag in ("trades", "klines"):
+                if tag in parts:
+                    idx = parts.index(tag)
+                    if idx + 1 < len(parts):
+                        return parts[idx + 1]
+            return "unknown"
+
+        # CSV parsing: handle klines and trades CSV
+        if inner_key.endswith(".csv"):
+            text = raw.decode(errors="ignore")
+            lines = text.splitlines()
+            header = (lines[0].strip().lower() if lines else "")
+            is_klines_header = ("open time" in header) or ("open_time" in header)
+
+            # Case 1: Klines with header row
+            if is_klines_header:
+                reader = _csv.DictReader(lines, delimiter=",")
+                for row in reader:
+                    try:
+                        ev = {
+                            "exchange": "binance",
+                            "symbol": row.get("symbol") or _symbol_from_path(key),
+                            "open_time": int(row.get("open_time") or row.get("Open time") or 0),
+                            "open": float(row.get("open") or row.get("Open") or 0.0),
+                            "high": float(row.get("high") or row.get("High") or 0.0),
+                            "low": float(row.get("low") or row.get("Low") or 0.0),
+                            "close": float(row.get("close") or row.get("Close") or 0.0),
+                            "volume": float(row.get("volume") or row.get("Volume") or 0.0),
+                            "close_time": int(row.get("close_time") or row.get("Close time") or 0),
+                        }
+                        yield ev
+                    except Exception:
+                        logger.warning("Skipping malformed kline csv row in %s", key)
+                        continue
+                return
+
+            # Case 2: Headerless klines CSV (detect by path)
+            if ("/klines/" in key) or ("/klines/" in inner_key):
+                raw_rows = _csv.reader(lines)
+                for row in raw_rows:
+                    try:
+                        # Expect at least [open_time, open, high, low, close, volume, close_time]
+                        if len(row) < 7:
+                            continue
+                        ev = {
+                            "exchange": "binance",
+                            "symbol": _symbol_from_path(key),
+                            "open_time": int(row[0]),
+                            "open": float(row[1]),
+                            "high": float(row[2]),
+                            "low": float(row[3]),
+                            "close": float(row[4]),
+                            "volume": float(row[5]),
+                            "close_time": int(row[6]),
+                        }
+                        yield ev
+                    except Exception:
+                        # Skip silently to avoid log spam for large files
+                        continue
+                return
+
+            # Case 3: Trades CSV with header (price,qty,time present)
+            reader = _csv.DictReader(lines, delimiter=",")
+            if reader.fieldnames and all(h in (reader.fieldnames or []) for h in ("price", "qty", "time")):
+                for row in reader:
+                    try:
+                        ev = {
+                            "exchange": "binance",
+                            "symbol": row.get("symbol") or _symbol_from_path(key),
+                            "price": float(row.get("price") or 0.0),
+                            "qty": float(row.get("qty") or 0.0),
+                            "ts_event": int(row.get("time") or 0),
+                        }
+                        yield ev
+                    except Exception:
+                        logger.warning("Skipping malformed trade csv row in %s", key)
+                        continue
+                return
+
+            # Case 4: Headerless trades CSV (id, price, qty, quoteQty, time, isBuyerMaker, isBestMatch)
+            raw_rows = _csv.reader(lines)
+            for row in raw_rows:
                 try:
+                    if len(row) < 5:
+                        continue
                     ev = {
                         "exchange": "binance",
-                        "symbol": "unknown",
-                        "open_time": int(row["open_time"]),
-                        "open": float(row["open"]),
-                        "high": float(row["high"]),
-                        "low": float(row["low"]),
-                        "close": float(row["close"]),
-                        "volume": float(row["volume"]),
-                        "close_time": int(row["close_time"]),
+                        "symbol": _symbol_from_path(key),
+                        "price": float(row[1]),
+                        "qty": float(row[2]),
+                        "ts_event": int(row[4]),
                     }
+                    yield ev
                 except Exception:
-                    logger.warning("Skipping malformed csv row in %s", key)
+                    # Skip silently to avoid log spam
                     continue
-                yield ev
             return
 
-        # Default: JSONL
+        # Default: JSONL (direct .jsonl or uncompressed)
         for line in raw.splitlines():
             line = line.strip()
             if not line:
@@ -308,17 +477,24 @@ class BinanceS3Source(Source):
 
     def run(self):
         import time as _t
+        import os as _os
         # expose alias on module for tests
         global _time
         if _time is None:
             _time = _t
         keys = sorted(list(self._iter_object_keys()))
+        debug = _os.environ.get("BINANCE_S3_DEBUG")
+        if debug:
+            logger.info("BinanceS3Source: will process %d keys", len(keys))
         prev_ts = None
+        total_records = 0
         for key in keys:
             if self._dry_run:
-                # skip fetching and producing; proceed to next key
+                if debug:
+                    logger.info("[dry-run] key=%s", key)
                 continue
             body = self._read_object(key)
+            per_key = 0
             for record in self._iter_records_from_body(key, body):
                 # For CSV klines, prefer close_time as ts if timestamp not set
                 ts = self._timestamp_setter(record)
@@ -343,4 +519,10 @@ class BinanceS3Source(Source):
                     key=self._key_setter(record), value=value, timestamp_ms=ts
                 )
                 self.produce(key=msg.key, value=msg.value, timestamp=msg.timestamp)
+                per_key += 1
+                total_records += 1
+            if debug:
+                logger.info("Parsed %d records from %s", per_key, key)
+        if debug:
+            logger.info("BinanceS3Source: total produced records=%d", total_records)
         self.producer.flush()

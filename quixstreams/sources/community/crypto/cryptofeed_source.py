@@ -1,9 +1,24 @@
 from __future__ import annotations
 
+import importlib
 import logging
-from typing import Callable, Optional
+import warnings
+from dataclasses import replace
+from typing import Callable, Optional, Union
 
 from quixstreams.sources.base import ClientConnectFailureCallback, ClientConnectSuccessCallback, Source
+from quixstreams.sources.community.crypto.config import (
+    AuthProvider,
+    CryptofeedConfig,
+    NoAuth,
+    ValidationError,
+    RetryConfig,
+)
+from quixstreams.sources.community.crypto.errors import (
+    missing_dependency_error,
+    connection_error,
+)
+from quixstreams.sources.community.crypto.retry import retry_with_backoff
 from quixstreams.sources.community.crypto.utils import (
     TopicBuilder,
     default_key_fn,
@@ -13,10 +28,6 @@ from quixstreams.sources.community.crypto.utils import (
 )
 
 logger = logging.getLogger(__name__)
-
-# time alias for tests
-_time = None
-
 
 class CryptofeedSource(Source):
     """
@@ -28,66 +39,107 @@ class CryptofeedSource(Source):
 
     def __init__(
         self,
+        config: Optional[CryptofeedConfig] = None,
         *,
-        exchanges: list[str],
-        channels: list[str],
+        exchanges: Optional[list[str]] = None,
+        channels: Optional[list[str]] = None,
         symbols: Optional[list[str]] = None,
-        normalize: bool = True,
+        auth_provider: Optional[AuthProvider] = None,
         reconnect: bool = True,
-        max_retries: Optional[int] = None,
+        normalize: bool = True,
+        max_retries: int = 3,
+        retry_config: Optional[RetryConfig] = None,
         key_setter: Optional[Callable[[dict], object]] = None,
         timestamp_setter: Optional[Callable[[dict], Optional[int]]] = None,
-        name: Optional[str] = None,
-        shutdown_timeout: float = 10.0,
         on_client_connect_success: Optional[ClientConnectSuccessCallback] = None,
         on_client_connect_failure: Optional[ClientConnectFailureCallback] = None,
     ) -> None:
+        if config is None:
+            warnings.warn(
+                "Direct CryptofeedSource kwargs are deprecated; pass a CryptofeedConfig instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            config = CryptofeedConfig(
+                exchanges=exchanges or [],
+                channels=channels or [],
+                symbols=symbols or [],
+                auth_provider=auth_provider or NoAuth(),
+                reconnect=reconnect,
+                normalize=normalize,
+                retry_config=retry_config or RetryConfig(max_retries=max_retries),
+            )
+        elif retry_config is not None:
+            warnings.warn(
+                "retry_config argument is ignored when a CryptofeedConfig instance is provided.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        elif max_retries != 3:
+            warnings.warn(
+                "max_retries argument is ignored when a CryptofeedConfig instance is provided.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+        if not config.validate():
+            raise ValidationError("Invalid CryptofeedConfig provided")
+        
+        # Import guard
         try:
-            import importlib
-            import sys as _sys
-            if "cryptofeed" in _sys.modules:
-                # ensure import error if it's a stubbed None
-                if _sys.modules["cryptofeed"] is None:
-                    raise ImportError("cryptofeed missing")
-            else:
-                importlib.import_module("cryptofeed")
-        except Exception as e:  # noqa: BLE001
-            raise ImportError(
-                "CryptofeedSource requires 'cryptofeed'. Install: pip install quixstreams[crypto]"
-            ) from e
+            importlib.import_module("cryptofeed")
+        except ImportError as e:
+            raise missing_dependency_error("cryptofeed", "CryptofeedSource", "crypto") from e
+
+        self._config = config
+        retry_config = config.retry_config
+        if not isinstance(retry_config, RetryConfig):
+            raise ValidationError("retry_config must be provided as a RetryConfig instance")
+        if not self._config.reconnect and retry_config.enabled:
+            retry_config = replace(retry_config, enabled=False, max_retries=0)
+        self._retry_config = retry_config
 
         super().__init__(
-            name=name or TopicBuilder("cryptofeed", datatype="events"),
-            shutdown_timeout=shutdown_timeout,
+            name="cryptofeed-source",
+            shutdown_timeout=self._config.shutdown_timeout,
             on_client_connect_success=on_client_connect_success,
             on_client_connect_failure=on_client_connect_failure,
         )
-        self._exchanges = exchanges
-        self._channels = channels
-        self._symbols = symbols or []
-        self._normalize = normalize
-        self._reconnect = reconnect
-        self._max_retries = max_retries
+        
         self._key_setter = key_setter or default_key_fn
         self._timestamp_setter = timestamp_setter or default_ts_fn
         self._fh = None
 
     def setup(self):
-        import cryptofeed as cf
+        cf = importlib.import_module("cryptofeed")
 
         self._fh = cf.FeedHandler()
 
         # Register a single exchange with combined channels for simplicity in tests
         callbacks = {}
-        if "trades" in self._channels:
+        if "trades" in self._config.channels:
             callbacks["trades"] = self._on_trade
-        if "ticker" in self._channels:
+        if "ticker" in self._config.channels:
             callbacks["ticker"] = self._on_ticker
 
         # For tests, we assume add_feed(exchange, channels=[...], symbols=[...], callbacks=dict)
         # Real wiring may differ per cryptofeed.
-        for ex in self._exchanges:
-            self._fh.add_feed(ex, channels=self._channels, symbols=self._symbols, callbacks=callbacks)
+        try:
+            for ex in self._config.exchanges:
+                self._fh.add_feed(ex, channels=self._config.channels, symbols=self._config.symbols, callbacks=callbacks)
+        except ValueError as e:
+            from .errors import CryptoSourceConfigError
+            error_msg = f"Invalid cryptofeed configuration: {str(e)}"
+            # Include specific exchange/channel details in the error message
+            if "exchanges" in str(e).lower() or any(ex in str(e) for ex in self._config.exchanges):
+                error_msg += f". Invalid exchange(s): {self._config.exchanges}"
+            if "channels" in str(e).lower() or any(ch in str(e) for ch in self._config.channels):
+                error_msg += f". Invalid channel(s): {self._config.channels}"
+            raise CryptoSourceConfigError(
+                error_msg,
+                source="CryptofeedSource",
+                context={"exchanges": self._config.exchanges, "channels": self._config.channels, "original_error": str(e)}
+            ) from e
 
     def _produce_event(self, event: dict):
         ts = self._timestamp_setter(event)
@@ -97,40 +149,27 @@ class CryptofeedSource(Source):
         self.produce(key=msg.key, value=msg.value, timestamp=msg.timestamp)
 
     def _on_trade(self, event: dict):
-        if self._normalize:
-            event = normalize_trade(event)
+        event = normalize_trade(event)
         self._produce_event(event)
 
     def _on_ticker(self, event: dict):
-        if self._normalize:
-            event = normalize_ticker(event)
+        event = normalize_ticker(event)
         self._produce_event(event)
 
     def run(self):
-        import time as _t
-        global _time
-        if _time is None:
-            _time = _t
-
-        attempts = 0
-        while True:
+        def _start_feed() -> None:
             try:
                 self._fh.run()
-                break
-            except Exception as e:  # noqa: BLE001
-                if not self._reconnect:
-                    raise
-                attempts += 1
-                if self._max_retries is not None and attempts > self._max_retries:
-                    logger.error("Max retries exceeded; aborting")
-                    raise
-                backoff = min(2 ** (attempts - 1), 30)
-                logger.warning(f"cryptofeed run failed, retrying in {backoff}s: {e}")
-                (_time or _t).sleep(backoff)
+            except Exception as error:  # pragma: no cover - runtime-specific
+                logger.error("CryptofeedSource failed: %s", error)
+                raise connection_error("CryptofeedSource", error)
+
+        retry_with_backoff(_start_feed, self._retry_config, "CryptofeedSource")
 
         # Block until stopped
+        import time
         while self.running and getattr(self._fh, "running", True):
-            (_time or _t).sleep(0.1)
+            time.sleep(0.1)
 
     def stop(self):
         try:
