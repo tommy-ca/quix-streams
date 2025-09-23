@@ -36,12 +36,12 @@
 ## Task Plan
 
 - [x] 1. Implement Iceberg table lifecycle and commit pipeline (✅ COMPLETED)
-  - [x] 1.1 Build TableLifecycleManager pyiceberg adapter (Cycle 0-1 — September 22, 2025)
+  - [x] 1.1 Build TableLifecycleManager pyiceberg adapter (Cycles 0-1,5 — September 22-23, 2025)
     - ✅ Catalog factory with pyiceberg-friendly adapter (`table_lifecycle.py` - 156 lines)
     - ✅ Schema/partition spec persistence via adapter methods
     - ✅ Cached metadata refresh with TTL enforcement
     - _Requirements: REQ-1, REQ-3, REQ-7_
-  - [x] 1.2 Emit durable data files as part of commit pipeline (Cycle 0-1 — September 22, 2025)
+  - [x] 1.2 Emit durable data files as part of commit pipeline (Cycles 0-1,5 — September 22-23, 2025)
     - ✅ Parquet batch generation using pyarrow/pyiceberg primitives
     - ✅ File staging and descriptor passing to REST catalog commits
     - ✅ Commit retry with rollback on failure
@@ -117,6 +117,7 @@
 - 2025-09-22: Cycle 2.2 observability hooks — Prometheus HTTP payload, logging level control, and alert thresholds implemented.
 - 2025-09-22: Cycle 3 schema presets — Config-driven presets & partition templates applied via lifecycle manager.
 - 2025-09-22: Cycle 4 integration harness — Added pytest fixtures for REST catalog, MinIO bucket, and performance smoke harness.
+- 2025-09-23: Cycle 5 table ops — PyIceberg catalog factory, partition spec mapping, and transactional commit retries implemented under TDD.
 - 2025-09-22: **IMPLEMENTATION MILESTONE** — Core table lifecycle, observability, schema presets, and testing infrastructure 95%+ complete. Remaining scope reduced to optional developer tooling enhancements.
 - 2025-09-23: Cycle 5.1 development tooling — Enhanced Docker Compose with health checks, debug utilities, sample data generation for multiple domains, and complete dev stack orchestration implemented using TDD methodology.
 - 2025-09-23: Cycle 5.2 extensibility hooks — Runtime configuration reloading, pluggable adapter registries, extension point system, and configuration-driven customization completed with 14 passing tests using TDD RED-GREEN-REFACTOR methodology.

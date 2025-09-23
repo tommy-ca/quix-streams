@@ -87,14 +87,13 @@ This AGENTS.md file provides shared memory context for all agent interactions, e
 ## Memory Updates
 
 ### Latest Context (Current Session)
-- **Schema (Cycle 3.1)**: Config now accepts schema presets/fields; lifecycle manager applies partition templates automatically.
-- **Observability (Cycle 2.2)**: Prometheus HTTP payload, dynamic log levels, and metric alert thresholds wired into IcebergRESTSink.
-
-- **Observability (Cycle 2.1)**: Metrics collector now tracks flush counts, bytes, and renders Prometheus output; health check reports artifacts.
-- **Status**: Specifications synchronized for implementation readiness
-- **Architecture**: Schema-agnostic design finalized and documented
-- **Tasks**: 18 remaining tasks prioritized for 30% completion
-- **Ready**: All specs approved and implementation can begin
+- **Cycle 5 (2025-09-23)**: PyIceberg-backed catalog factory, partition spec synthesis, and transactional commit retries with rollback landed under TDD (TSK-010/011).
+- **Schema & Presets**: Config-driven presets and partition templates remain green from Cycle 3.
+- **Observability**: Prometheus export, alert thresholds, and logging controls stable (Cycle 2).
+- **Status**: Implementation at 95%+, spec synced with Kiro; only production validation tasks remain.
+- **Architecture**: Schema-agnostic design finalized; Iceberg lifecycle now drives real pyIceberg tables.
+- **Tasks**: 2 remaining (production validation & readiness checks).
+- **Ready**: Focus shifts to performance validation and deployment readiness once scheduled.
 
 ---
 

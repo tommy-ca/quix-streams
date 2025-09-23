@@ -45,6 +45,26 @@ class StorageWriter:
             }
         ]
 
+    def rollback(self, artifacts: Iterable[dict]) -> None:
+        """Delete staged artifacts for the last batch when a commit fails."""
+
+        for descriptor in artifacts:
+            path_value = descriptor.get("path") if isinstance(descriptor, dict) else None
+            if not path_value:
+                continue
+
+            path = Path(path_value)
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+            try:
+                self._artifacts.remove(path)
+            except ValueError:
+                # Artifact might already be removed or was not tracked
+                continue
+
     def close(self) -> None:
         for artifact in self._artifacts:
             try:

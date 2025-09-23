@@ -7,6 +7,12 @@ from typing import List
 import pytest
 
 from quixstreams.sinks.community.iceberg_rest import IcebergRESTSink, create_local_config
+from quixstreams.sinks.community.iceberg_rest.config import (
+    CatalogConfig,
+    IcebergConfig,
+    StorageConfig,
+    StorageProvider,
+)
 
 
 class RecordingManager:
@@ -80,3 +86,52 @@ def test_sink_updates_schema_descriptor_on_new_field(monkeypatch: pytest.MonkeyP
 
     assert "price" not in initial_fields
     assert "price" in evolved_fields
+
+
+def test_sink_ensures_pyiceberg_table_when_memory_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("pyiceberg")
+    from pyiceberg.table import Table  # type: ignore
+
+    catalog = CatalogConfig(uri="memory://catalog", warehouse_id="memory")
+    storage = StorageConfig(
+        provider=StorageProvider.MINIO,
+        region="us-east-1",
+        endpoint_url="http://localhost:9000",
+        access_key_id="access",
+        secret_access_key="secret",
+    )
+    config = IcebergConfig(
+        table_name="trades",
+        catalog=catalog,
+        storage=storage,
+        schema_descriptor={
+            "fields": [
+                {"name": "id", "type": "long", "required": True},
+                {"name": "price", "type": "double"},
+                {"name": "event_date", "type": "timestamp"},
+            ],
+            "partition_fields": [
+                {"name": "event_date"},
+            ],
+        },
+    )
+
+    sink = IcebergRESTSink(config=config)
+    sink.setup()
+
+    manager = sink._table_manager
+    if manager is None:  # pragma: no cover - optional dependency guard
+        pytest.skip("Table lifecycle manager unavailable without pyiceberg")
+
+    descriptor = sink._build_schema_descriptor()
+    table = manager.ensure_table(
+        table_identifier=sink._table_identifier,
+        schema_descriptor=descriptor,
+    )
+
+    assert isinstance(table, Table)
+    schema_obj = table.schema if not callable(getattr(table, "schema", None)) else table.schema()
+    field_names = {field.name for field in getattr(schema_obj, "fields", [])}
+    assert {"id", "price"}.issubset(field_names)
+
+    sink.close()

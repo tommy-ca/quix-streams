@@ -318,14 +318,15 @@ class IcebergRESTSink:
         }
         self._is_setup = False
         self._metrics = metrics_collector or MetricsCollector()
-        
+
         # Error handling counters and tracking
         self._commit_conflict_count = 0
         self._connection_retry_count = 0
-        
+        self._max_commit_attempts = 3
+
         # Data processing strategy for nested structures
         self._data_flattening_strategy = "json_serialize"  # Default strategy
-        
+
         # Kafka metadata preservation
         self._kafka_metadata_columns = ["_kafka_topic", "_kafka_partition", "_kafka_offset", "_kafka_headers"]
         
@@ -366,6 +367,7 @@ class IcebergRESTSink:
         self._last_written_artifacts: List[dict] = []
         self._alert_thresholds: Dict[str, Dict[str, float]] = {}
         self._field_types: Dict[str, str] = {}
+        self._catalog_instance: Optional[object] = None
     
     def setup(self) -> None:
         """Setup the sink for operation.
@@ -706,16 +708,37 @@ class IcebergRESTSink:
         }
 
         try:
-            self.client.post_records([commit_descriptor])
-        except CommitFailedException as e:
-            # Handle commit conflicts by raising backpressure error
-            self._commit_conflict_count += 1
-            logger.warning(f"Commit conflict detected (count: {self._commit_conflict_count}): {e}")
-            # Calculate backpressure delay based on conflict count
-            retry_delay = min(1.0 + (self._commit_conflict_count * 0.5), 10.0)
-            raise SinkBackpressureError(retry_after=retry_delay)
+            attempts = 0
+            while True:
+                attempts += 1
+                try:
+                    self.client.post_records([commit_descriptor])
+                    if attempts > 1:
+                        self._metrics.increment("commit_retry_total", attempts - 1)
+                    self._commit_conflict_count = 0
+                    break
+                except CommitFailedException as e:
+                    self._commit_conflict_count += 1
+                    logger.warning(
+                        "Commit conflict detected (attempt %s/%s, count: %s): %s",
+                        attempts,
+                        self._max_commit_attempts,
+                        self._commit_conflict_count,
+                        e,
+                    )
+                    if attempts >= self._max_commit_attempts:
+                        retry_delay = min(1.0 + (self._commit_conflict_count * 0.5), 10.0)
+                        self._metrics.increment("commit_failure_total", 1)
+                        self._rollback_last_batch()
+                        raise SinkBackpressureError(retry_after=retry_delay) from e
+                    continue
         except (NetworkError, TimeoutError, AuthenticationError):
+            self._metrics.increment("commit_failure_total", 1)
+            self._rollback_last_batch()
             # These errors are already properly formatted by the client
+            raise
+        except SinkBackpressureError:
+            # rollback already handled before the exception bubbled up
             raise
         except Exception as e:
             # For detailed error context, use SinkError instead of IcebergRESTError
@@ -727,11 +750,12 @@ class IcebergRESTSink:
                     'catalog_uri': self.config.catalog_uri,
                     'warehouse_id': getattr(self.config, 'warehouse_id', None)
                 }
-            }
-            
+                }
+
             # Re-raise IcebergRESTError subclasses directly unless they need context
             if isinstance(e, IcebergRESTError) and not isinstance(e, SinkError):
                 # Convert to SinkError with context for better debugging
+                self._rollback_last_batch()
                 raise SinkError(
                     operation="batch write",
                     context=context,
@@ -742,15 +766,25 @@ class IcebergRESTSink:
                 # Already a SinkError, just add context if missing
                 if not hasattr(e, 'error_context') or not e.error_context:
                     e.error_context = context
+                self._rollback_last_batch()
                 raise
             else:
                 # Wrap unexpected errors in SinkError with context
+                self._rollback_last_batch()
                 raise SinkError(
                     operation="batch write",
                     context=context,
                     cause=e,
                     message=f"Unexpected error sending batch: {e}"
                 )
+
+    def _rollback_last_batch(self) -> None:
+        if not self._last_written_artifacts:
+            return
+        try:
+            self._storage_writer.rollback(self._last_written_artifacts)
+        finally:
+            self._last_written_artifacts = []
 
     def _initialize_table_manager(self) -> Optional[TableLifecycleManager]:
         try:
@@ -766,7 +800,37 @@ class IcebergRESTSink:
             return None
 
     def _create_catalog(self):
-        return InMemoryCatalogAdapter()
+        if self._catalog_instance is not None:
+            return self._catalog_instance
+
+        try:
+            from pyiceberg.catalog import load_catalog  # type: ignore
+        except ImportError:  # pragma: no cover - pyiceberg optional
+            self._catalog_instance = InMemoryCatalogAdapter()
+            return self._catalog_instance
+
+        uri = self.config.catalog_uri
+        warehouse = self.config.warehouse_id
+
+        if uri.startswith("memory://"):
+            catalog_name = uri.split("://", 1)[1] or warehouse
+            self._catalog_instance = load_catalog(catalog_name, type="in-memory")
+            return self._catalog_instance
+
+        catalog_conf: Dict[str, object] = {"uri": uri}
+        token = getattr(self.config.catalog, "token", None)
+        if token:
+            catalog_conf["credential"] = token
+
+        catalog_conf.update(self.config.auth)
+
+        try:
+            self._catalog_instance = load_catalog(warehouse, type="rest", **catalog_conf)
+        except Exception as exc:  # pragma: no cover - fallback path
+            logger.debug("Falling back to in-memory catalog adapter: %s", exc)
+            self._catalog_instance = InMemoryCatalogAdapter()
+
+        return self._catalog_instance
 
     def _ensure_table_ready(self, records: List[Dict[str, Any]]) -> None:
         if not self._table_manager:

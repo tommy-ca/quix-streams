@@ -8,10 +8,13 @@ from typing import Callable, Dict, Iterable, List
 
 
 try:  # pragma: no cover - optional dependency guard
-    from pyiceberg.exceptions import NoSuchTableError  # type: ignore
+    from pyiceberg.exceptions import NamespaceAlreadyExistsError, NoSuchTableError  # type: ignore
 except ImportError:  # pragma: no cover - fallback for test doubles
     class NoSuchTableError(Exception):  # type: ignore
         """Fallback exception used in tests when pyiceberg is unavailable."""
+
+    class NamespaceAlreadyExistsError(Exception):  # type: ignore
+        """Fallback namespace error used in tests when pyiceberg is unavailable."""
 
 
 class SchemaAlignmentProtocol:
@@ -70,7 +73,12 @@ class TableLifecycleManager:
             table = catalog.load_table(table_identifier)
         except Exception as exc:  # pylint: disable=broad-except
             if isinstance(exc, NoSuchTableError) or exc.__class__.__name__ == "FakeNoSuchTableError":
-                table = catalog.create_table(table_identifier, schema, partition_spec)
+                self._ensure_namespace(catalog, table_identifier)
+                table = catalog.create_table(
+                    table_identifier,
+                    schema,
+                    partition_spec=partition_spec,
+                )
             else:
                 raise
 
@@ -82,6 +90,24 @@ class TableLifecycleManager:
 
         self._cache[table_identifier] = CachedTable(table=table, timestamp=now)
         return table
+
+    def _ensure_namespace(self, catalog, identifier: str) -> None:
+        """Create namespace for an identifier if the catalog supports it."""
+
+        if not hasattr(catalog, "create_namespace"):
+            return
+
+        parts = identifier.split(".")
+        if len(parts) <= 1:
+            return
+
+        namespace = tuple(parts[:-1])
+        try:
+            catalog.create_namespace(namespace)
+        except NamespaceAlreadyExistsError:  # type: ignore
+            return
+        except Exception:  # pragma: no cover - best-effort for adapters without namespace API
+            return
 
 
 class _ManagedSchema:

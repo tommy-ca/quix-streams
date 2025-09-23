@@ -15,9 +15,19 @@ try:  # pragma: no cover - optional dependency
         FloatType,
         IntegerType,
         LongType,
+        TimestampType,
         StringType,
     )
-    from pyiceberg.partitioning import PartitionSpec  # type: ignore
+    from pyiceberg.partitioning import PartitionField, PartitionSpec  # type: ignore
+    from pyiceberg.transforms import (  # type: ignore
+        BucketTransform,
+        DayTransform,
+        HourTransform,
+        IdentityTransform,
+        MonthTransform,
+        TruncateTransform,
+        YearTransform,
+    )
 
     _HAS_PYICEBERG = True
 except ImportError:  # pragma: no cover - fallback structure for tests
@@ -49,6 +59,7 @@ _TYPE_MAPPING = {
     "boolean": BooleanType if _HAS_PYICEBERG else "bool",
     "str": StringType if _HAS_PYICEBERG else "string",
     "string": StringType if _HAS_PYICEBERG else "string",
+    "timestamp": TimestampType if _HAS_PYICEBERG else "timestamp",
 }
 
 
@@ -81,9 +92,48 @@ def build_partition_spec(descriptor: Dict[str, object]) -> PartitionSpec:
     """Build partition specification from descriptor."""
 
     fields = descriptor.get("partition_fields") or []
-    if _HAS_PYICEBERG:
-        return PartitionSpec().from_dict(fields) if hasattr(PartitionSpec, "from_dict") else PartitionSpec(fields=fields)  # type: ignore[attr-defined]
-    return PartitionSpec(fields=list(fields))
+    if not fields:
+        if _HAS_PYICEBERG:
+            schema = build_schema(descriptor)
+            return PartitionSpec(schema=schema, fields=tuple())  # type: ignore[arg-type]
+        return PartitionSpec(fields=list(fields))
+
+    if not _HAS_PYICEBERG:
+        return PartitionSpec(fields=list(fields))
+
+    schema = build_schema(descriptor)
+    name_to_field = {getattr(field, "name", None): field for field in getattr(schema, "fields", [])}
+    next_field_id = (max((getattr(field, "field_id", 1000) for field in name_to_field.values()), default=999) + 1)
+
+    partition_fields = []
+    for raw_field in fields:
+        name = raw_field.get("name") if isinstance(raw_field, dict) else None
+        if not name:
+            continue
+
+        source_field = name_to_field.get(name)
+        if source_field is None:
+            continue
+
+        source_id = int(raw_field.get("source-id", getattr(source_field, "field_id", 0)))
+        field_id = raw_field.get("field-id")
+        if field_id is None:
+            field_id = next_field_id
+            next_field_id += 1
+
+        transform = _resolve_partition_transform(raw_field)
+        alias = raw_field.get("name_alias") or name
+
+        partition_fields.append(
+            PartitionField(
+                source_id=source_id,
+                field_id=int(field_id),
+                transform=transform,
+                name=alias,
+            )
+        )
+
+    return PartitionSpec(schema=schema, fields=tuple(partition_fields))  # type: ignore[arg-type]
 
 
 def align_schema(*, table, target_schema: Schema) -> List[Dict[str, object]]:
@@ -113,3 +163,46 @@ def _extract_field_names(schema) -> List[str]:
         if name:
             names.append(name)
     return names
+
+
+def _resolve_partition_transform(spec: Dict[str, object]):
+    if not _HAS_PYICEBERG:
+        return None
+
+    raw = str(spec.get("transform", "identity")).lower()
+
+    if raw.startswith("truncate"):
+        size = spec.get("width")
+        if size is None:
+            size = _extract_transform_param(raw, "truncate")
+        return TruncateTransform(int(size)) if size else IdentityTransform()
+
+    if raw.startswith("bucket"):
+        buckets = spec.get("buckets")
+        if buckets is None:
+            buckets = _extract_transform_param(raw, "bucket")
+        return BucketTransform(int(buckets)) if buckets else IdentityTransform()
+
+    if raw == "day":
+        return DayTransform()
+    if raw == "month":
+        return MonthTransform()
+    if raw == "year":
+        return YearTransform()
+    if raw == "hour":
+        return HourTransform()
+
+    return IdentityTransform()
+
+
+def _extract_transform_param(raw: str, prefix: str) -> int | None:
+    start = len(prefix) + 1
+    if not raw.startswith(f"{prefix}[") or not raw.endswith("]"):
+        return None
+    value = raw[start:-1]
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
