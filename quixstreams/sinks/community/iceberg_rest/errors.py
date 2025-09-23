@@ -195,3 +195,84 @@ class BufferError(IcebergRESTError):
         self.operation = operation
         self.buffer_size = buffer_size
         self.max_size = max_size
+
+
+class SchemaIncompatibilityError(SchemaError):
+    """Raised when schema changes are incompatible.
+    
+    This error is thrown when attempting to write data that would require
+    incompatible schema changes, such as changing a field from int to string.
+    """
+    
+    def __init__(self, field_name: str, old_type: str, new_type: str, 
+                 table_name: str = None, message: str = None):
+        """Initialize schema incompatibility error.
+        
+        Args:
+            field_name: Name of the field with incompatible change
+            old_type: Original field type
+            new_type: New incompatible field type
+            table_name: Table name where incompatibility occurred
+            message: Custom error message
+        """
+        if not message:
+            message = f"incompatible type change for field '{field_name}': {old_type} -> {new_type}"
+        
+        # Call SchemaError constructor with schema_issue parameter
+        super().__init__(schema_issue=message, table_name=table_name)
+        self.field_name = field_name
+        self.old_type = old_type
+        self.new_type = new_type
+
+
+class CatalogConnectionError(NetworkError):
+    """Raised when catalog connection fails with retry information."""
+    
+    def __init__(self, catalog_uri: str, retry_count: int = 0, 
+                 last_error: Exception = None, message: str = None):
+        """Initialize catalog connection error.
+        
+        Args:
+            catalog_uri: URI of the catalog that failed to connect
+            retry_count: Number of connection retry attempts made
+            last_error: The last exception encountered during connection
+            message: Custom error message
+        """
+        if not message:
+            message = f"Failed to connect to catalog after {retry_count} retries: {catalog_uri}"
+        
+        super().__init__(message, cause=last_error)
+        self.catalog_uri = catalog_uri
+        self.retry_count = retry_count
+        self.last_error = last_error
+
+
+class SinkError(IcebergRESTError):
+    """Raised when sink operations fail with detailed context.
+    
+    Provides rich error context for debugging sink issues.
+    """
+    
+    def __init__(self, operation: str, context: dict = None, 
+                 cause: Exception = None, message: str = None):
+        """Initialize sink error with context.
+        
+        Args:
+            operation: Sink operation that failed
+            context: Additional context information for debugging
+            cause: Underlying exception that caused this error
+            message: Custom error message
+        """
+        if not message:
+            message = f"Sink {operation} failed"
+            if context:
+                context_str = ", ".join(f"{k}={v}" for k, v in context.items())
+                message += f" (context: {context_str})"
+        
+        super().__init__(message, cause=cause)
+        self.operation = operation
+        self.context = context or {}
+        self.error_context = context or {}  # Also provide error_context alias for test compatibility
+
+
+# Additional error types required by tests

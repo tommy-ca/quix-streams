@@ -271,6 +271,16 @@ def get_config_examples() -> Dict[str, RESTIcebergConfig]:
     """
     return {
         "local": create_local_rest_config(table_name="example_table"),
+        "minio": RESTIcebergConfig(
+            catalog_uri="http://localhost:8181/api/v1",
+            table_name="example_table",
+            warehouse_id="minio-warehouse",
+            s3_endpoint_url="http://localhost:9000",
+            s3_region="us-east-1",
+            s3_access_key_id="minioadmin",
+            s3_secret_access_key="minioadmin",
+            auth_type="none"
+        ),
         "cloudflare_r2": create_r2_config(
             account_id="example-account",
             access_key_id="r2-access-key",

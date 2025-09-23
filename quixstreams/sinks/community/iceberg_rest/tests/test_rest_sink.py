@@ -10,14 +10,19 @@ Date: September 19, 2025
 
 import pytest
 
+from quixstreams.sinks.community.iceberg_rest import IcebergRESTSink, create_local_config
+
 
 class TestIcebergRESTSink:
-    """Test the main IcebergRESTSink implementation."""
-    
-    def test_rest_sink_placeholder(self):
-        """Placeholder test - will be implemented in VALIDATE phase."""
-        # This ensures the test file exists and is discoverable
-        assert True, "REST sink tests placeholder"
+    """Tests covering IcebergRESTSink edge cases."""
+
+    def test_process_nested_data_unknown_strategy_raises(self):
+        config = create_local_config(table_name="test_events")
+        sink = IcebergRESTSink(config=config)
+        sink._data_flattening_strategy = "totally_unknown"
+
+        with pytest.raises(ValueError):
+            sink._process_nested_data({"foo": "bar"})
 
 
 if __name__ == "__main__":

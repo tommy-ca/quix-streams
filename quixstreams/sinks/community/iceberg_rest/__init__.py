@@ -32,7 +32,11 @@ from .config import (
     create_r2_config,
     create_s3_rest_config,
     validate_rest_config,
-    RESTIcebergConfig
+    RESTIcebergConfig,
+    AWSIcebergConfig,
+    # Additional functions for test compatibility
+    create_sink_from_env,
+    validate_sink_config,
 )
 
 # Import additional helpers from old config_helpers for stack management
@@ -48,6 +52,9 @@ from .config_helpers import (
 
 # Import main sink implementation (refactored)
 from .sink import IcebergRESTSink
+from .table_lifecycle import TableLifecycleManager
+from .observability import MetricsCollector
+from .schema_presets import load_schema_preset, available_presets
 
 # Import REST catalog client for advanced usage
 from .client import RESTCatalogClient
@@ -62,7 +69,11 @@ from .errors import (
     AuthenticationError,
     CatalogError,
     SchemaError,
-    BufferError
+    BufferError,
+    # Additional error types for test compatibility
+    SchemaIncompatibilityError,
+    CatalogConnectionError,
+    SinkError,
 )
 
 # Public API
@@ -70,6 +81,10 @@ __all__ = [
     # Core classes
     "IcebergRESTSink",
     "RESTCatalogClient",
+    "TableLifecycleManager",
+    "MetricsCollector",
+    "load_schema_preset",
+    "available_presets",
     
     # Unified Configuration API (New - SOLID principles)
     "create_config",
@@ -83,12 +98,15 @@ __all__ = [
     
     # Backward Compatibility (Deprecated)
     "RESTIcebergConfig",
+    "AWSIcebergConfig",
     "create_local_rest_config", 
     "create_r2_config",
     "create_s3_rest_config",
     "validate_rest_config",
     "get_config_examples", 
     "print_config_example",
+    "create_sink_from_env",
+    "validate_sink_config",
     
     # Local stack management
     "start_local_stack",
@@ -106,7 +124,10 @@ __all__ = [
     "AuthenticationError",
     "CatalogError",
     "SchemaError",
-    "BufferError"
+    "BufferError",
+    "SchemaIncompatibilityError",
+    "CatalogConnectionError",
+    "SinkError",
 ]
 
 # Module metadata
