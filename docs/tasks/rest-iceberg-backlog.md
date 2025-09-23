@@ -95,6 +95,53 @@ Implement schema management and partitioning strategies for crypto data.
 - [ ] Schema evolution works without breaking existing tables
 - [ ] Table creation includes proper partitioning
 
+### REST-004: Hardening REST Client Packaging & Runtime
+**Story Points**: 3 | **Priority**: Critical | **Dependencies**: REST-001 | **Owner**: Python Developer
+
+#### Description
+Ensure the REST sink ships with all mandatory runtime dependencies and verify request/serialization paths are exercised by tests.
+
+#### Acceptance Criteria
+- [ ] Add `requests` to `requirements.txt` and optional extras where appropriate
+- [ ] Document the dependency addition in release notes
+- [ ] CI installation succeeds from a clean virtual environment
+- [ ] Add unit test that instantiates `RESTCatalogClient` without monkeypatching `requests`
+
+#### Technical Tasks
+- [ ] Update package manifests (`requirements.txt`, `pyproject.optional-dependencies`)
+- [ ] Add smoke test covering `RESTCatalogClient.build_headers()` / `.post_records()` with a stub transport
+- [ ] Update developer documentation highlighting the dependency
+
+#### Definition of Done
+- [ ] New dependency verified in lockfiles / dependency graphs
+- [ ] Tests passing and cover the new import path
+- [ ] No regressions in dependency conflict checks
+
+### REST-005: Resolve Adaptive Batching Recursion Bug
+**Story Points**: 5 | **Priority**: Critical | **Dependencies**: REST-001 | **Owner**: Python Developer
+
+#### Description
+Fix the `_process_nested_data` fallback recursion and add coverage for all supported flattening strategies.
+
+#### Acceptance Criteria
+- [ ] Unknown strategy paths raise a descriptive error instead of infinite recursion
+- [ ] Tests cover `json_serialize`, `flatten`, and `struct` strategies
+- [ ] Add regression test demonstrating safe handling of unexpected strategy strings
+- [ ] Update documentation with explicit strategy descriptions
+
+#### Technical Tasks
+- [ ] Refactor `_process_nested_data` to delegate to helper functions without recursion
+- [ ] Add targeted unit tests in `quixstreams/sinks/community/iceberg_rest/tests`
+- [ ] Update spec with behaviour clarification
+
+#### Definition of Done
+- [ ] New tests fail on current `main` and pass with fix
+- [ ] No pylint/ruff regressions
+- [ ] Spec and README mention strategy limits
+
+### REST-006: Reconcile E2E Configuration Validation Suite *(Completed)*
+**Outcome**: `tests/e2e/iceberg_sink/test_iceberg_rest_config_validation.py` now targets the unified configuration model and passes against the updated sink implementation.
+
 ---
 
 ## 🟡 HIGH PRIORITY (Sprint 2) - Cloudflare R2 & Local Stack

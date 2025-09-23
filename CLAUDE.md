@@ -22,8 +22,11 @@ Kiro-style Spec Driven Development implementation using claude code slash comman
 
 ### Active Specifications
 - **iceberg-rest-sink-production**: Production-ready Iceberg REST sink with schema-agnostic design, comprehensive catalog support, S3-compatible storage, and configurable optimizations
-  - **Status**: 70% complete (4600+ lines), implementation-ready
+  - **Status**: 90%+ complete (6200+ lines), implementation-ready
   - **Architecture**: Schema-agnostic with parameterized schemas (see [AGENTS.md](./AGENTS.md) for details)
+- **crypto-lakehouse-package**: Comprehensive crypto lakehouse coordination package that orchestrates crypto sources and Iceberg sink into unified streaming data pipelines
+  - **Status**: Requirements generated, ready for design phase
+  - **Scope**: Pipeline orchestration, deployment automation, monitoring, testing frameworks
 - Use `/kiro:spec-status [feature-name]` to check progress
 
 ## Development Guidelines

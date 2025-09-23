@@ -93,6 +93,70 @@ Optimize the multiple iterative batch transformations in Iceberg sink serializat
 - [ ] Memory usage tests with various batch sizes
 - [ ] Correctness tests comparing old vs new transformations
 
+### CRI-004: Restore Binance S3 Configuration Compatibility
+**Story Points**: 5 | **Priority**: Critical | **Dependencies**: None
+
+#### Description
+Reintroduce the legacy configuration entry points required by Binance S3 consumers (`.config`, `load_from_env`, `AWSAuth`) while retaining the simplified `simple_config` module.
+
+#### Acceptance Criteria
+- [ ] Recreate `quixstreams.sources.community.crypto.config` as a thin compatibility layer that delegates to the new simple configs
+- [ ] Ensure `load_from_env` supports all legacy environment variables used in docs/tests
+- [ ] Update `BinanceS3Source` to import from the compatibility layer without regression
+- [ ] Maintain deprecation warnings guiding users to the new API
+
+#### Technical Tasks
+- [ ] Implement shim module exporting `AuthProvider`, `RetryConfig`, etc., or update tests to new namespaces
+- [ ] Add unit tests covering `load_from_env` and the compatibility imports
+- [ ] Audit documentation to point to the new API while keeping migration notes
+
+#### Validation
+- [ ] `tests/test_quixstreams/test_sources/test_community/test_crypto/test_unified_config.py` passes without modifications
+- [ ] Manual smoke test constructing `BinanceS3Source` via both legacy kwargs and new config object
+
+### CRI-005: Initialise BinanceS3Source Runtime Flags
+**Story Points**: 3 | **Priority**: Critical | **Dependencies**: CRI-004
+
+#### Description
+Define `_dry_run`, `_replay_speed`, `_checksum_mode`, `_extract_metadata`, and other runtime flags during construction to prevent `AttributeError` at runtime.
+
+#### Acceptance Criteria
+- [ ] All runtime flags have explicit defaults aligned with legacy behaviour
+- [ ] `pytest tests/.../test_binance_s3_source.py` passes without monkeypatching private attributes
+- [ ] Add regression tests covering dry-run, checksum, and replay-speed branches
+
+#### Technical Tasks
+- [ ] Set defaults in `__init__` after config resolution
+- [ ] Update type hints and docstrings describing the flags
+- [ ] Extend tests to cover dry-run and checksum paths without relying on global state
+
+#### Validation
+- [ ] No AttributeErrors during integration tests
+- [ ] Behaviour documented in README / API reference
+
+### CRI-006: Reinstate Backwards-Compatible Crypto Source Constructors
+**Story Points**: 5 | **Priority**: Critical | **Dependencies**: CRI-004
+
+#### Description
+Provide backwards-compatible constructors (or helper factories) for `CCXTSource` and `CryptofeedSource` so existing call sites using keyword arguments do not break.
+
+#### Acceptance Criteria
+- [ ] Support both config-object and keyword-argument construction paths
+- [ ] Deprecation warnings emitted for legacy signatures
+- [ ] Update docs with migration guidance and examples for both styles
+
+#### Technical Tasks
+- [ ] Implement alternate constructors or `@classmethod from_kwargs`
+- [ ] Adjust tests to cover both instantiation paths
+- [ ] Ensure type hints/docstrings reflect accepted argument forms
+
+#### Validation
+- [ ] `tests/test_ccxt_source.py` and `tests/test_cryptofeed_source.py` green without modifications
+- [ ] Manual instantiation in notebooks/scripts succeeds with legacy kwargs
+
+### CRI-007: Align Source Integration Test Suites *(Completed)*
+**Outcome**: Both integration suites now consume the compatibility layer and pass under the new behaviour.
+
 ---
 
 ## 🟡 HIGH PRIORITY (Sprint 3-4)
