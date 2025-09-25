@@ -1,0 +1,42 @@
+# Crypto Lakehouse Historical Analysis Template  
+#
+# Simple template for replaying historical crypto data from Binance S3 archives
+# to Iceberg lakehouse storage for backtesting and research.
+#
+# Environment Variables:
+#   KAFKA_BOOTSTRAP_SERVERS: Kafka cluster address
+#   ICEBERG_CATALOG_URI: Iceberg REST catalog endpoint
+#   STORAGE_ENDPOINT: S3-compatible storage endpoint
+#   STORAGE_BUCKET: Storage bucket name
+#   AWS_ACCESS_KEY_ID: Storage access key
+#   AWS_SECRET_ACCESS_KEY: Storage secret key
+
+application:
+  app_id: "crypto-historical-lakehouse"
+  broker_address: "${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}"
+
+crypto_source:
+  type: "binance_s3"
+  bucket: "binance-public-data"
+  prefix_template: "data/spot/daily/trades/{symbol}/"
+  data_type: "trades"
+  symbols: ["BTCUSDT", "ETHUSDT"]
+  date_from: "2024-01-01"
+  date_to: "2024-01-31"
+  replay_speed: 1.0  # 1.0 = real-time, 0.0 = as fast as possible
+  enable_checksum: true
+
+iceberg_sink:
+  catalog_uri: "${ICEBERG_CATALOG_URI:http://localhost:8181}"
+  table_name: "crypto.historical_trades"
+  storage:
+    endpoint: "${STORAGE_ENDPOINT:http://localhost:9000}"
+    bucket: "${STORAGE_BUCKET:lakehouse}"
+    prefix: "crypto/historical/"
+    credentials:
+      access_key: "${AWS_ACCESS_KEY_ID:minioadmin}"
+      secret_key: "${AWS_SECRET_ACCESS_KEY:minioadmin}"
+
+topic:
+  name: "crypto.historical"
+  partitions: 6  # Higher partitions for historical throughput

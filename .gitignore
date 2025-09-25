@@ -44,3 +44,23 @@ __pycache__/
 
 # mkdocs
 site/
+
+# Data and test artifacts
+*.parquet
+*.log
+file:/
+file:/*
+/home/*/data/
+feedhandler.log
+manifest.json
+
+# Benchmarks and temporary files
+.benchmarks/
+*.benchmark
+*.tmp
+*.cache
+
+# Local development artifacts
+*.sqlite
+*.db
+*.sqlite3

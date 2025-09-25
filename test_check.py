@@ -1,0 +1,1 @@
+import subprocess; result = subprocess.run(["python", "-m", "pytest", "tests/infrastructure/test_testing_framework.py", "--tb=no", "-q", "--collect-only"], capture_output=True, text=True, timeout=30); print(f"Collected: {len([line for line in result.stdout.split() if ".py::" in line])} tests"); print("Status: SUCCESS" if result.returncode == 0 else "Status: FAILED")

@@ -1,0 +1,37 @@
+# Crypto Lakehouse Real-Time Trading Template
+#
+# Simple template for streaming real-time crypto trading data from Binance
+# to Iceberg lakehouse storage for immediate analysis.
+#
+# Environment Variables:
+#   KAFKA_BOOTSTRAP_SERVERS: Kafka cluster address
+#   ICEBERG_CATALOG_URI: Iceberg REST catalog endpoint
+#   STORAGE_ENDPOINT: S3-compatible storage endpoint
+#   STORAGE_BUCKET: Storage bucket name
+#   AWS_ACCESS_KEY_ID: Storage access key
+#   AWS_SECRET_ACCESS_KEY: Storage secret key
+
+application:
+  app_id: "crypto-realtime-lakehouse"
+  broker_address: "${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}"
+
+crypto_source:
+  type: "cryptofeed"
+  exchanges: ["binance"]
+  channels: ["trades", "ticker"] 
+  symbols: ["BTCUSDT", "ETHUSDT"]
+  
+iceberg_sink:
+  catalog_uri: "${ICEBERG_CATALOG_URI:http://localhost:8181}"
+  table_name: "crypto.realtime_trades"
+  storage:
+    endpoint: "${STORAGE_ENDPOINT:http://localhost:9000}"
+    bucket: "${STORAGE_BUCKET:lakehouse}"
+    prefix: "crypto/realtime/"
+    credentials:
+      access_key: "${AWS_ACCESS_KEY_ID:minioadmin}"
+      secret_key: "${AWS_SECRET_ACCESS_KEY:minioadmin}"
+
+topic:
+  name: "crypto.realtime"
+  partitions: 3

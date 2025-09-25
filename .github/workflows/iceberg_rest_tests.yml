@@ -1,0 +1,389 @@
+name: Iceberg REST Tests
+
+on:
+  push:
+    branches: [ main, develop, iceberg-rest-sink ]
+    paths:
+      - 'quixstreams/sinks/community/iceberg_rest/**'
+      - 'tests/**/*iceberg*'
+      - 'tests/**/*local_stack*'
+      - '.github/workflows/iceberg_rest_tests.yml'
+      - 'pyproject.toml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'quixstreams/sinks/community/iceberg_rest/**'
+      - 'tests/**/*iceberg*'
+      - 'tests/**/*local_stack*'
+      - '.github/workflows/iceberg_rest_tests.yml'
+      - 'pyproject.toml'
+  workflow_dispatch:
+    inputs:
+      run_benchmarks:
+        description: 'Run performance benchmarks'
+        required: false
+        default: 'true'
+        type: boolean
+
+env:
+  PYTHON_VERSION: '3.12'
+  PYTEST_TIMEOUT: '300'
+  DOCKER_COMPOSE_TIMEOUT: '120'
+
+jobs:
+  # Unit and Configuration Tests (Fast)
+  unit-tests:
+    name: Unit Tests & Configuration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[iceberg_rest,crypto]
+          pip install pytest pytest-cov pytest-benchmark pytest-timeout
+          
+      - name: Run configuration helper tests
+        run: |
+          python -m pytest tests/test_config_helpers.py -v \
+            --cov=quixstreams.sinks.community.iceberg_rest \
+            --cov-report=xml:coverage-unit.xml \
+            --cov-report=term-missing
+            
+      - name: Run local stack management tests  
+        run: |
+          python -m pytest tests/test_local_stack.py -v \
+            --cov=quixstreams.sinks.community.iceberg_rest \
+            --cov-report=xml:coverage-stack.xml \
+            --cov-report=term-missing \
+            --cov-append
+            
+      - name: Upload unit test coverage
+        uses: codecov/codecov-action@v3
+        with:
+          files: coverage-unit.xml,coverage-stack.xml
+          flags: unit-tests
+          name: unit-tests-coverage
+
+  # Integration Tests with Local Stack
+  integration-tests:
+    name: Integration Tests (Local Stack)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: unit-tests
+    
+    services:
+      docker:
+        image: docker:24-dind
+        options: --privileged
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[iceberg_rest,crypto]
+          pip install pytest pytest-cov pytest-benchmark pytest-timeout psycopg2-binary
+          
+      - name: Set up Docker Compose
+        run: |
+          curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
+          chmod +x /usr/local/bin/docker-compose
+          docker-compose --version
+          
+      - name: Start local development stack
+        run: |
+          cd infra/local-dev-stack
+          timeout ${{ env.DOCKER_COMPOSE_TIMEOUT }} docker-compose up -d
+          echo "Waiting for services to be ready..."
+          sleep 30
+          
+      - name: Verify local stack health
+        run: |
+          python -c "
+          from quixstreams.sinks.community.iceberg_rest import check_local_stack_health
+          import sys
+          health = check_local_stack_health(timeout=60)
+          print('Health status:', health)
+          if not all(health.values()):
+              print('Some services are not healthy!')
+              sys.exit(1)
+          print('All services healthy!')
+          "
+          
+      - name: Run integration tests
+        run: |
+          python -m pytest tests/integration/ -v -m "integration" \
+            --cov=quixstreams.sinks.community.iceberg_rest \
+            --cov-report=xml:coverage-integration.xml \
+            --cov-report=term-missing \
+            --timeout=${{ env.PYTEST_TIMEOUT }}
+            
+      - name: Upload integration test coverage
+        uses: codecov/codecov-action@v3
+        with:
+          files: coverage-integration.xml
+          flags: integration-tests
+          name: integration-tests-coverage
+          
+      - name: Stop local stack
+        if: always()
+        run: |
+          cd infra/local-dev-stack
+          docker-compose down -v
+          docker system prune -af
+
+  # Performance Benchmarks  
+  performance-tests:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: [unit-tests, integration-tests]
+    if: github.event.inputs.run_benchmarks == 'true' || github.event_name != 'workflow_dispatch'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[iceberg_rest,crypto]
+          pip install pytest pytest-cov pytest-benchmark pytest-timeout psycopg2-binary
+          
+      - name: Set up Docker Compose
+        run: |
+          curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
+          chmod +x /usr/local/bin/docker-compose
+          
+      - name: Start local development stack
+        run: |
+          cd infra/local-dev-stack
+          timeout ${{ env.DOCKER_COMPOSE_TIMEOUT }} docker-compose up -d
+          sleep 30
+          
+      - name: Run performance benchmarks
+        run: |
+          python -m pytest tests/performance/ -v -m "benchmark" \
+            --benchmark-only \
+            --benchmark-json=benchmark_results.json \
+            --benchmark-compare-fail=mean:10% \
+            --benchmark-sort=mean \
+            --timeout=${{ env.PYTEST_TIMEOUT }}
+            
+      - name: Store benchmark result
+        uses: benchmark-action/github-action-benchmark@v1
+        if: github.event_name == 'push'
+        with:
+          name: Iceberg REST Sink Benchmarks
+          tool: 'pytest'
+          output-file-path: benchmark_results.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          comment-on-alert: true
+          alert-threshold: '110%'
+          fail-on-alert: true
+          
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: benchmark-results
+          path: |
+            benchmark_results.json
+            .benchmarks/
+          retention-days: 30
+          
+      - name: Stop local stack
+        if: always()
+        run: |
+          cd infra/local-dev-stack  
+          docker-compose down -v
+          docker system prune -af
+
+  # End-to-End Validation (When REST sink is implemented)
+  e2e-tests:
+    name: End-to-End Validation
+    runs-on: ubuntu-latest  
+    timeout-minutes: 90
+    needs: [unit-tests, integration-tests]
+    if: github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'full-test')
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[iceberg_rest,crypto]
+          pip install pytest pytest-cov pytest-benchmark pytest-timeout psycopg2-binary
+          
+      - name: Set up Docker Compose
+        run: |
+          curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
+          chmod +x /usr/local/bin/docker-compose
+          
+      - name: Start local development stack
+        run: |
+          cd infra/local-dev-stack
+          timeout ${{ env.DOCKER_COMPOSE_TIMEOUT }} docker-compose up -d
+          sleep 45
+          
+      - name: Run end-to-end pipeline tests
+        run: |
+          python -m pytest tests/integration/test_end_to_end_pipeline.py -v \
+            --cov=quixstreams.sinks.community.iceberg_rest \
+            --cov-report=xml:coverage-e2e.xml \
+            --cov-report=term-missing \
+            --timeout=${{ env.PYTEST_TIMEOUT }}
+            
+      - name: Upload e2e test coverage
+        uses: codecov/codecov-action@v3
+        with:
+          files: coverage-e2e.xml
+          flags: e2e-tests
+          name: e2e-tests-coverage
+          
+      - name: Stop local stack
+        if: always()
+        run: |
+          cd infra/local-dev-stack
+          docker-compose down -v
+          docker system prune -af
+
+  # Testing Framework Validation (Meta-test)
+  framework-tests:
+    name: Testing Framework Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip  
+          pip install -e .[iceberg_rest,crypto]
+          pip install pytest pytest-cov pytest-benchmark pytest-timeout psycopg2-binary
+          
+      - name: Test framework configuration
+        run: |
+          python -m pytest tests/infrastructure/test_testing_framework.py -v \
+            --tb=short \
+            --timeout=600
+
+  # Quality Gates and Reporting
+  quality-gates:
+    name: Quality Gates & Reporting  
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests, framework-tests]
+    if: always()
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Download all coverage reports
+        uses: actions/download-artifact@v3
+        
+      - name: Generate final coverage report
+        run: |
+          pip install coverage[toml]
+          coverage combine
+          coverage report --fail-under=90
+          coverage html
+          coverage xml
+          
+      - name: Upload final coverage report  
+        uses: codecov/codecov-action@v3
+        with:
+          files: coverage.xml
+          flags: final-coverage
+          name: final-coverage-report
+          fail_ci_if_error: true
+          
+      - name: Upload HTML coverage report
+        uses: actions/upload-artifact@v3
+        with:
+          name: coverage-report
+          path: htmlcov/
+          retention-days: 30
+
+  # Security and Code Quality
+  security-scan:
+    name: Security & Code Quality
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          
+      - name: Install security tools
+        run: |
+          pip install bandit safety ruff
+          
+      - name: Run security scan (Bandit)
+        run: |
+          bandit -r quixstreams/sinks/community/iceberg_rest/ \
+            -f json -o bandit-report.json
+          
+      - name: Run dependency security check (Safety)
+        run: |
+          safety check --json --output safety-report.json || true
+          
+      - name: Run code quality check (Ruff)
+        run: |
+          ruff check quixstreams/sinks/community/iceberg_rest/ \
+            --output-format=json --output-file=ruff-report.json
+            
+      - name: Upload security reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-reports
+          path: |
+            bandit-report.json
+            safety-report.json  
+            ruff-report.json
+          retention-days: 30

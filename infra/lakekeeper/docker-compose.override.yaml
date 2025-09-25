@@ -1,0 +1,6 @@
+services:
+  lakekeeper:
+    environment:
+      - LAKEKEEPER__CATALOG__WAREHOUSE=file:/home/nonroot/warehouse
+    volumes:
+      - /home/tommyk/data/iceberg/warehouse:/home/nonroot/warehouse
