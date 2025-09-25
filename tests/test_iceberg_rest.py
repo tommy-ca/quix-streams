@@ -39,11 +39,21 @@ class TestIcebergRESTSink:
         """Test that write method calls REST endpoint with proper headers."""
         from quixstreams.sinks.community.iceberg_rest import (
             IcebergRESTSink,
-            create_local_rest_config
+            create_config,
+            StorageProvider,
         )
         
-        cfg = create_local_rest_config(table_name="test_table")
-        cfg.catalog_token = "test-token-123"
+        cfg = create_config(
+            table_name="test_table",
+            catalog_uri="http://localhost:8181/api/v1",
+            warehouse_id="local-warehouse",
+            provider=StorageProvider.MINIO,
+            region="us-east-1",
+            endpoint_url="http://localhost:9000",
+            access_key_id="minioadmin",
+            secret_access_key="minioadmin",
+            catalog_token="test-token-123",
+        )
         
         # Use small batch size to trigger immediate send
         sink = IcebergRESTSink(cfg, batch_size=2)
@@ -75,7 +85,10 @@ class TestIcebergRESTSink:
         import json
         payload = json.loads(kwargs["data"].decode('utf-8'))
         assert "records" in payload
-        assert len(payload["records"]) == 2
+        # Commit descriptor batching: one commit with record_count
+        assert len(payload["records"]) == 1
+        first = payload["records"][0]
+        assert first.get("record_count") == 2
     
     @pytest.mark.iceberg_rest
     def test_write_handles_non_2xx_as_error(self):
@@ -132,19 +145,16 @@ class TestIcebergRESTSink:
     
     @pytest.mark.iceberg_rest 
     def test_config_validation(self):
-        """Test that invalid configurations are rejected."""
-        from quixstreams.sinks.community.iceberg_rest import IcebergRESTSink
-        from quixstreams.sinks.community.iceberg_rest.config_helpers import RESTIcebergConfig
+        """Test that invalid configurations are rejected at config construction."""
+        from quixstreams.sinks.community.iceberg_rest import CatalogConfig, StorageConfig, IcebergConfig, StorageProvider
         
-        # Invalid config - missing required fields
-        from quixstreams.sinks.community.iceberg_rest.errors import ConfigurationError
-        with pytest.raises(ConfigurationError):
-            invalid_config = RESTIcebergConfig(
-                catalog_uri="",  # Empty URI
+        # Invalid config - missing required fields in CatalogConfig
+        with pytest.raises(ValueError):
+            invalid_config = IcebergConfig(
                 table_name="test_table",
-                warehouse_id="test_warehouse"
+                catalog=CatalogConfig(uri="", warehouse_id="test_warehouse"),  # Empty URI should fail
+                storage=StorageConfig(provider=StorageProvider.AWS, region="us-east-1"),
             )
-            sink = IcebergRESTSink(invalid_config)
 
 
 class TestRESTSinkIntegration:

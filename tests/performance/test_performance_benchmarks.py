@@ -1,51 +1,42 @@
-"""
-Placeholder performance benchmark tests.
+"""Performance validation tests for Iceberg REST sink production readiness."""
 
-This file will be populated with comprehensive performance benchmarks during the
-VALIDATE-001 phase when the actual REST sink is implemented.
-
-Author: TDD Sprint 3 - GREEN Phase
-Date: September 18, 2025
-"""
+from __future__ import annotations
 
 import pytest
 
 
-class TestPerformanceBenchmarks:
-    """Placeholder for performance benchmark tests."""
-    
-    @pytest.mark.benchmark
-    @pytest.mark.iceberg_rest
-    def test_sink_throughput_placeholder(self, benchmark):
-        """Placeholder benchmark - will be implemented in VALIDATE-001 phase."""
-        # This test ensures the benchmark marker is discoverable
-        result = benchmark(lambda: "throughput test")
-        assert result == "throughput test", "Throughput benchmark placeholder"
-    
-    @pytest.mark.benchmark
-    @pytest.mark.iceberg_rest  
-    def test_sink_latency_placeholder(self, benchmark):
-        """Placeholder benchmark - will be implemented in VALIDATE-001 phase."""
-        # This test ensures latency benchmarks are discoverable
-        result = benchmark(lambda: "latency test")
-        assert result == "latency test", "Latency benchmark placeholder"
-    
-    @pytest.mark.benchmark
-    @pytest.mark.iceberg_rest
-    def test_sink_memory_usage_placeholder(self, benchmark):
-        """Placeholder benchmark - will be implemented in VALIDATE-001 phase."""
-        # This test ensures memory usage benchmarks are discoverable
-        result = benchmark(lambda: "memory test")
-        assert result == "memory test", "Memory usage benchmark placeholder"
-    
-    @pytest.mark.benchmark
-    @pytest.mark.iceberg_rest
-    def test_sink_cpu_usage_placeholder(self, benchmark):
-        """Placeholder benchmark - will be implemented in VALIDATE-001 phase."""
-        # This test ensures CPU usage benchmarks are discoverable  
-        result = benchmark(lambda: "cpu test")
-        assert result == "cpu test", "CPU usage benchmark placeholder"
+@pytest.mark.benchmark
+@pytest.mark.iceberg_rest
+def test_sink_meets_throughput_and_memory_targets(iceberg_performance_harness):
+    """TSK-6.1: Ensure throughput, memory, and recovery metrics meet acceptance criteria."""
+
+    result = iceberg_performance_harness.run_benchmark(
+        records=12_000,
+        payload_bytes=1_024,
+        target_throughput=10_000,
+        buffer_limit_bytes=50_000_000,
+    )
+
+    assert result["throughput_records_per_second"] >= 10_000
+    assert result["memory_peak_bytes"] <= 50_000_000
+    assert result["recovered_batches"] == 0
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "--benchmark-only"])
+@pytest.mark.benchmark
+@pytest.mark.iceberg_rest
+@pytest.mark.parametrize("provider", ["aws", "cloudflare_r2", "minio"])
+def test_sink_benchmark_reports_by_provider(iceberg_performance_harness, provider):
+    """TSK-6.1: Validate benchmark exposes provider-specific telemetry for dashboards."""
+
+    result = iceberg_performance_harness.run_benchmark(
+        records=6_000,
+        payload_bytes=512,
+        target_throughput=8_000,
+        buffer_limit_bytes=25_000_000,
+        provider=provider,
+    )
+
+    assert result["provider"] == provider
+    assert result["throughput_records_per_second"] >= 8_000
+    assert "latency_p99_ms" in result
+    assert result["latency_p99_ms"] >= 0

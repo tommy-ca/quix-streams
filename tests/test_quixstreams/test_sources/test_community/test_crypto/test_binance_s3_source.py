@@ -339,6 +339,82 @@ def test_parsers_json_gz_line_delimited(monkeypatch, mock_boto3):
     # verify at least one record uses close_time as ts (CSV klines)
     assert any(call["timestamp"] == 1060 for call in fakeprod.produced)
 
+def test_headerless_trades_csv_parsing(monkeypatch, mock_boto3):
+    import csv
+    # one object with headerless trades CSV rows
+    def list_one(**kwargs):
+        return {"IsTruncated": False, "Contents": [{"Key": "p/spot/daily/trades/BTCUSDT/2025-01-01/trades.csv"}]}
+
+    # rows: id,price,qty,quoteQty,time,isBuyerMaker,isBestMatch
+    rows = [
+        ["1", "100.5", "0.01", "1.005", "1700000000", "1", "true"],
+        ["2", "100.6", "0.02", "2.012", "1700000010", "0", "false"],
+    ]
+    csv_text = "\n".join([",".join(r) for r in rows])
+
+    class DummyBody:
+        def __init__(self, b): self._b=b
+        def read(self): return self._b
+
+    def get_object(**kwargs):
+        return {"Body": DummyBody(csv_text.encode())}
+
+    dummy = mock_boto3
+    dummy.list_objects_v2 = list_one
+    dummy.get_object = get_object
+
+    src = BinanceS3Source(bucket="b", prefix="p/")
+    src._s3 = dummy
+    fakeprod = _fake_topic_and_producer(monkeypatch, src)
+
+    src.run()
+    # two rows -> two produced
+    assert len(fakeprod.produced) == 2
+    # symbol inferred from path
+    assert all(call["value"].get("symbol") == "BTCUSDT" for call in fakeprod.produced)
+    # timestamps from column index 4
+    assert [call["timestamp"] for call in fakeprod.produced] == [1700000000, 1700000010]
+
+
+def test_nested_gz_inside_zip_parsing(monkeypatch, mock_boto3):
+    import json, gzip, zipfile, io
+
+    def list_one(**kwargs):
+        return {"IsTruncated": False, "Contents": [{"Key": "p/nested.zip"}]}
+
+    # Build inner gzipped jsonl
+    lines = [
+        {"exchange":"binance","symbol":"BTCUSDT","price":100,"qty":1,"ts_event":1},
+        {"exchange":"binance","symbol":"BTCUSDT","price":101,"qty":2,"ts_event":2},
+    ]
+    inner_jsonl = "\n".join(json.dumps(l) for l in lines).encode()
+    inner_gz = gzip.compress(inner_jsonl)
+
+    # Create zip containing a .jsonl.gz file
+    zbuf = io.BytesIO()
+    with zipfile.ZipFile(zbuf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('inner.jsonl.gz', inner_gz)
+    buf_zip = zbuf.getvalue()
+
+    class DummyBody:
+        def __init__(self, b): self._b=b
+        def read(self): return self._b
+
+    def get_object(**kwargs):
+        return {"Body": DummyBody(buf_zip)}
+
+    dummy = mock_boto3
+    dummy.list_objects_v2 = list_one
+    dummy.get_object = get_object
+
+    src = BinanceS3Source(bucket="b", prefix="p")
+    src._s3 = dummy
+    fakeprod = _fake_topic_and_producer(monkeypatch, src)
+
+    src.run()
+    # two jsonl lines inside nested gz->zip -> two produced
+    assert len(fakeprod.produced) == 2
+
 
 def test_replay_speed_real_time_and_asap(monkeypatch, mock_boto3):
     import quixstreams.sources.community.crypto.binance_s3_source as mod

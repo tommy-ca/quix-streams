@@ -116,6 +116,15 @@ Built with modern engineering principles, this sink provides clean, maintainable
 5. IF setup fails THEN the sink SHALL provide step-by-step troubleshooting guidance
 
 ### Requirement 10: Extensibility
+
+## Spec Linkage and Decisions (2025-09-24)
+- Linked spec: docs/specs/sinks/iceberg_rest.md
+- Decisions:
+  - Token immutability: Provide token at configuration construction; no runtime mutation
+  - Validation: Fail-fast at configuration layer (CatalogConfig) for invalid/empty URI; sink may additionally validate
+  - Payload semantics: Commit-descriptor batching; HTTP payload contains commit descriptors with record_count
+  - Timestamp conventions: Per-record ts_event preserved; client adds batch-level ingestion timestamp
+- Tests aligned: tests/test_iceberg_rest.py updated accordingly
 **Objective:** As a platform engineer, I want clean extension points, so that I can customize behavior without modifying core code.
 
 #### Acceptance Criteria

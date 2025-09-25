@@ -58,6 +58,7 @@ from .schema_presets import load_schema_preset, available_presets
 
 # Import REST catalog client for advanced usage
 from .client import RESTCatalogClient
+from .deployment import DeploymentReadiness
 
 # Import error hierarchy for better error handling
 from .errors import (
@@ -85,6 +86,7 @@ __all__ = [
     "MetricsCollector",
     "load_schema_preset",
     "available_presets",
+    "DeploymentReadiness",
     
     # Unified Configuration API (New - SOLID principles)
     "create_config",

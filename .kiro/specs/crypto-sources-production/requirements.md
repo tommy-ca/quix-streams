@@ -17,6 +17,12 @@ This implementation successfully demonstrates project engineering principles:
 
 ## Introduction
 
+### Spec Linkage and Notes (2025-09-24)
+- Linked spec: docs/specs/sources/crypto.md
+- Topic naming: TopicBuilder rules and defaults standardized across sources
+- Timestamps: Use ts_event consistently; Binance S3 CSV klines fallback to close_time when needed
+- Environment: load_from_env matrix documented for Binance S3
+
 The Crypto Sources module provides unified, production-ready cryptocurrency data ingestion for QuixStreams through three specialized source implementations. This module enables streaming data acquisition from real-time websocket feeds (Cryptofeed), REST APIs with optional websockets (CCXT), and historical replay from public S3 archives (Binance S3).
 
 **Implementation Status**: 100% complete (2110 lines) with unified configuration system, comprehensive error handling, retry mechanisms, and full TDD test coverage. This module follows SOLID engineering principles with type-safe configuration, dependency injection, and clean abstraction layers.

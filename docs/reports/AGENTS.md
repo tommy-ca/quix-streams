@@ -88,12 +88,13 @@ This AGENTS.md file provides shared memory context for all agent interactions, e
 
 ### Latest Context (Current Session)
 - **Cycle 5 (2025-09-23)**: PyIceberg-backed catalog factory, partition spec synthesis, and transactional commit retries with rollback landed under TDD (TSK-010/011).
+- **Cycle 6 (2025-09-23)**: Performance benchmarks and deployment readiness checklist delivered (TSK-6.1/6.2).
 - **Schema & Presets**: Config-driven presets and partition templates remain green from Cycle 3.
 - **Observability**: Prometheus export, alert thresholds, and logging controls stable (Cycle 2).
-- **Status**: Implementation at 95%+, spec synced with Kiro; only production validation tasks remain.
+- **Status**: Implementation complete; production validation benchmarks now automated.
 - **Architecture**: Schema-agnostic design finalized; Iceberg lifecycle now drives real pyIceberg tables.
-- **Tasks**: 2 remaining (production validation & readiness checks).
-- **Ready**: Focus shifts to performance validation and deployment readiness once scheduled.
+- **Tasks**: 0 remaining (TSK-6 signed off).
+- **Ready**: Operational handoff with runbook available under docs/specs/iceberg-rest-sink-testing-plan.md.
 
 ---
 

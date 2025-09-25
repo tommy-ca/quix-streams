@@ -132,7 +132,8 @@ markers = [
   "iceberg_rest: marks tests as related to iceberg REST sink functionality",
   "integration: marks tests as integration tests requiring local stack",
   "benchmark: marks tests as performance benchmarks",
-  "local_stack: marks tests requiring local development stack services"
+  "local_stack: marks tests requiring local development stack services",
+  "infrastructure: marks tests covering deployment readiness and operational checks"
 ]
 
 # Coverage configuration for iceberg_rest testing framework

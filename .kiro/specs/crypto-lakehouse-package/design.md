@@ -172,6 +172,11 @@ sink_topic: "crypto.all"
 
 ## Usage
 
+### Spec Linkage (2025-09-24)
+- Crypto sources spec: docs/specs/sources/crypto.md (topic naming, keys/ts, env matrix)
+- Iceberg REST sink spec: docs/specs/sinks/iceberg_rest.md (timestamp conventions, REST contract)
+- Integration patterns doc: docs/integration/crypto-lakehouse-patterns.md (as created in this spec)
+
 ### Basic Usage
 
 ```python

@@ -95,6 +95,13 @@ No deviations from established patterns occur - the implementation follows exist
 
 ### Key Design Decisions
 
+#### Decision Update (2025-09-24)
+- Token handling: Immutable token via configuration (no post-construction mutation)
+- Validation location: Prefer config-layer validation for catalog URI; sink-level validation optionally reinforces
+- Payload structure: Commit descriptor abstraction submitted to REST endpoint
+- Timestamps: Preserve ts_event fields; add batch-level ingestion timestamp in client payload
+- See docs/specs/sinks/iceberg_rest.md for the canonical spec
+
 #### Decision 1: Unified Configuration Architecture
 - **Decision**: Implement SOLID principle-based configuration with separate CatalogConfig and StorageConfig classes
 - **Context**: Legacy implementation had provider-specific factory functions creating maintenance overhead and code duplication
